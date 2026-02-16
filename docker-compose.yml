@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  synapse-db:
+    image: postgres:15
+    container_name: synapse-postgres
+    environment:
+      POSTGRES_DB: synapse_db
+      POSTGRES_USER: synapse_user
+      POSTGRES_PASSWORD: synapse_pass
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      TZ: "Asia/Kolkata"
+    command: postgres -c timezone=Asia/Kolkata
+    volumes:
+      - ./synapse-db:/var/lib/postgresql/data
+    ports:
+    - "5433:5432" 
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse_user -d synapse_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  enterprise-postgres:
+    image: postgres:15
+    container_name: enterprise-postgres
+    environment:
+      POSTGRES_DB: enterprise_db
+      POSTGRES_USER: enterprise_user
+      POSTGRES_PASSWORD: enterprise_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./enterprise-db/pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: synapse
+    depends_on:
+      synapse-db:
+        condition: service_healthy
+    volumes:
+      - ./data:/data
+    ports:
+      - "8008:8008"
+    restart: unless-stopped
+
+  synapse-admin:
+    image: awesometechnologies/synapse-admin:latest
+    container_name: synapse-admin
+    ports:
+      - "8080:80"
+    restart: unless-stopped

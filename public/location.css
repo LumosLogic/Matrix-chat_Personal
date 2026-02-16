@@ -1,0 +1,202 @@
+/* Location page styles - extends the existing design system */
+
+.location-icon-wrapper {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.location-icon {
+  font-size: 48px;
+  width: 80px;
+  height: 80px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gps-instruction {
+  color: #666;
+  font-size: 15px;
+  text-align: center;
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+/* Map container */
+.map-container {
+  width: 100%;
+  height: 200px;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 20px;
+  border: 2px solid #e0e0e0;
+}
+
+/* Mode selection buttons */
+.mode-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.btn-full {
+  width: 100%;
+  text-align: center;
+}
+
+/* Duration picker */
+.duration-options {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.duration-btn {
+  flex: 1;
+  padding: 20px 12px;
+  background: #f5f5f5;
+  border: 2px solid #e0e0e0;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+
+.duration-btn:hover {
+  border-color: #667eea;
+  background: #f0f0ff;
+}
+
+.duration-time {
+  display: block;
+  font-size: 28px;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.duration-label {
+  display: block;
+  font-size: 13px;
+  color: #666;
+  margin-top: 4px;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #667eea;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 8px 16px;
+  width: 100%;
+  text-align: center;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+}
+
+/* Live badge */
+.live-badge {
+  display: inline-block;
+  background: #e53935;
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  margin-bottom: 12px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Live info section */
+.live-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  background: #f5f5f5;
+  border-radius: 10px;
+}
+
+.countdown {
+  display: flex;
+  flex-direction: column;
+}
+
+#countdown-timer {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1a1a2e;
+  font-variant-numeric: tabular-nums;
+}
+
+.countdown-label {
+  font-size: 12px;
+  color: #888;
+}
+
+.live-coords {
+  font-size: 12px;
+  color: #888;
+  font-family: monospace;
+  text-align: right;
+}
+
+/* Danger button (stop sharing) */
+.btn-danger {
+  width: 100%;
+  padding: 16px;
+  background: linear-gradient(135deg, #ef5350 0%, #e53935 100%);
+  border: none;
+  border-radius: 10px;
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.btn-danger:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(229, 57, 53, 0.4);
+}
+
+.btn-danger:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Code styling inside hints */
+.hint code {
+  background: rgba(0, 0, 0, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 480px) {
+  .map-container {
+    height: 160px;
+  }
+
+  .duration-btn {
+    padding: 16px 8px;
+  }
+
+  .duration-time {
+    font-size: 24px;
+  }
+}

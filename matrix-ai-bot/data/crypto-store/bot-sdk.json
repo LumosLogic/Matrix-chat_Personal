@@ -1,0 +1,13 @@
+{
+  "deviceId": "TXWDFYAOBW",
+  "rooms": {
+    "004e1c0549abc3edabbca6cb115c26b0c814271aa2badab0472f88bbc94e20b79bee685be543b13041a7b40a89bd0c6e0887414ab51d63fa3f4c4d0b8833ff05": {
+      "algorithm": "m.megolm.v1.aes-sha2",
+      "historyVisibility": "shared"
+    },
+    "5007c24f4bc9c5095386a26f00c7e819e1bfbc86af5e3fc8c98621dcf2cfc73bff614dde9152677576211b151271b11096387120fa96f33a091ab65a6ea7cf40": {
+      "algorithm": "m.megolm.v1.aes-sha2",
+      "historyVisibility": "shared"
+    }
+  }
+}

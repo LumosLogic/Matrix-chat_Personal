@@ -1,0 +1,18 @@
+{
+  "name": "matrix-enterprise-backend",
+  "version": "1.0.0",
+  "description": "Enterprise Matrix registration backend with invite system",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "http-proxy-middleware": "^3.0.5",
+    "matrix-js-sdk": "^34.13.0",
+    "pg": "^8.11.3"
+  }
+}

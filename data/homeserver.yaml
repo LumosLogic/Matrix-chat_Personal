@@ -1,0 +1,74 @@
+# Configuration file for Synapse.
+
+server_name: "localhost"
+
+# --- ENTERPRISE REGISTRATION SETTINGS ---
+enable_registration: true
+registration_requires_token: true
+# ---------------------------------------
+
+pid_file: /data/homeserver.pid
+
+listeners:
+  - port: 8008
+    resources:
+      - names:
+          - client
+          - federation
+        compress: false
+    tls: false
+    type: http
+    x_forwarded: true
+
+# --- DATABASE CONFIG (POSTGRESQL – REQUIRED ON WINDOWS) ---
+database:
+  name: psycopg2
+  args:
+    user: synapse_user
+    password: synapse_pass
+    database: synapse_db
+    host: synapse-db
+    port: 5432
+    cp_min: 5
+    cp_max: 10
+# ---------------------------------------------------------
+
+log_config: "/data/localhost.log.config"
+
+media_store_path: /data/media_store
+
+registration_shared_secret: "Cj,OLV3OtXRTV1byfxa^9L&v-_Qm*=VC~pJecOL2meAr,6.=4f"
+
+report_stats: false
+
+# Relaxed rate limiting for bot logins
+rc_login:
+  address:
+    per_second: 1
+    burst_count: 20
+  account:
+    per_second: 1
+    burst_count: 20
+  failed_attempts:
+    per_second: 1
+    burst_count: 20
+
+macaroon_secret_key: "W:KlxOy__G*QcF&P;vN.Wc-nc@v=iNr0LYt3W6NLDGA4U_NFKG"
+form_secret: "3VZdeT2;K+CbxLzQjcR:5MeRS:fJl=;_dTVeJMU4E2h*~oFkD6"
+
+signing_key_path: "/data/localhost.signing.key"
+
+trusted_key_servers:
+  - server_name: "matrix.org"
+
+# --- LOCATION SHARING SUPPORT (MSC3488 & MSC3672) ---
+experimental_features:
+  msc3488_enabled: true
+  msc3672_enabled: true
+  spaces_enabled: true
+
+# Allow location events
+event_cache_size: 10K
+
+# Enable location message types
+allow_public_rooms_over_federation: true

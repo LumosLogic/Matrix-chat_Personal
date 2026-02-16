@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Share Location - Enterprise Matrix</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/location.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Loading State -->
+    <div id="loading-card" class="card">
+      <div class="loading-spinner"></div>
+      <p>Validating session...</p>
+    </div>
+
+    <!-- Invalid/Expired Session -->
+    <div id="invalid-card" class="card error-card" style="display: none;">
+      <div class="error-icon">!</div>
+      <h1>Invalid Session</h1>
+      <p id="invalid-message">This location sharing link is invalid or has expired.</p>
+      <p class="hint">Please request a new link by typing <code>!location</code> in chat.</p>
+    </div>
+
+    <!-- GPS Permission -->
+    <div id="gps-card" class="card" style="display: none;">
+      <div class="card-header">
+        <div class="location-icon-wrapper">
+          <div class="location-icon">&#128205;</div>
+        </div>
+        <h1>Share Your Location</h1>
+        <p>Sharing as <strong id="gps-user-id"></strong></p>
+      </div>
+      <p class="gps-instruction">Allow location access so we can share your position in the chat.</p>
+      <button id="gps-btn" class="btn-primary" onclick="requestGPS()">
+        <span class="btn-text">Enable Location</span>
+        <span class="btn-loading" style="display: none;">
+          <span class="spinner"></span>
+          Getting location...
+        </span>
+      </button>
+      <div id="gps-error" class="error-message" style="display: none;"></div>
+    </div>
+
+    <!-- Mode Selection -->
+    <div id="mode-card" class="card" style="display: none;">
+      <div class="card-header">
+        <h1>Share Location</h1>
+        <p>How would you like to share?</p>
+      </div>
+      <div id="map-preview" class="map-container"></div>
+      <div class="mode-buttons">
+        <button class="btn-primary" onclick="sendCurrentLocation()">
+          <span class="btn-text">Share Current Location</span>
+          <span class="btn-loading" style="display: none;">
+            <span class="spinner"></span>
+            Sending...
+          </span>
+        </button>
+        <button class="btn-secondary btn-full" onclick="showDurationPicker()">
+          Share Live Location
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Duration Picker -->
+    <div id="duration-card" class="card" style="display: none;">
+      <div class="card-header">
+        <h1>Live Location</h1>
+        <p>How long do you want to share?</p>
+      </div>
+      <div class="duration-options">
+        <button class="duration-btn" onclick="startLive(900000)">
+          <span class="duration-time">15</span>
+          <span class="duration-label">minutes</span>
+        </button>
+        <button class="duration-btn" onclick="startLive(3600000)">
+          <span class="duration-time">1</span>
+          <span class="duration-label">hour</span>
+        </button>
+        <button class="duration-btn" onclick="startLive(28800000)">
+          <span class="duration-time">8</span>
+          <span class="duration-label">hours</span>
+        </button>
+      </div>
+      <button class="btn-link" onclick="showModeSelection()">Back</button>
+    </div>
+
+    <!-- Live Active -->
+    <div id="live-card" class="card" style="display: none;">
+      <div class="card-header">
+        <div class="live-badge">LIVE</div>
+        <h1>Sharing Location</h1>
+        <p>Your location is being shared in the chat</p>
+      </div>
+      <div id="live-map" class="map-container"></div>
+      <div class="live-info">
+        <div class="countdown">
+          <span id="countdown-timer">--:--</span>
+          <span class="countdown-label">remaining</span>
+        </div>
+        <div class="live-coords" id="live-coords"></div>
+      </div>
+      <button class="btn-danger" onclick="stopLive()">
+        <span class="btn-text">Stop Sharing</span>
+        <span class="btn-loading" style="display: none;">
+          <span class="spinner"></span>
+          Stopping...
+        </span>
+      </button>
+    </div>
+
+    <!-- Success -->
+    <div id="success-card" class="card success-card" style="display: none;">
+      <div class="success-icon">&#10003;</div>
+      <h1>Location Shared!</h1>
+      <p>Your location has been sent to the chat. You can close this page.</p>
+    </div>
+
+  </div>
+
+  <script src="/location.js"></script>
+</body>
+</html>

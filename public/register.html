@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register - Enterprise Matrix</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Registration Form -->
+    <div id="register-card" class="card">
+      <div class="card-header">
+        <h1>Create Your Account</h1>
+        <p>Complete registration to join the Matrix network</p>
+      </div>
+
+      <form id="register-form">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <div class="input-prefix">
+            <span class="prefix">@</span>
+            <input
+              type="text"
+              id="username"
+              name="username"
+              placeholder="johndoe"
+              autocomplete="username"
+              required
+            >
+            <span class="suffix">:localhost</span>
+          </div>
+          <small class="hint">Lowercase letters, numbers, and underscores only</small>
+        </div>
+
+        <div class="form-group">
+          <label for="full_name">Full Name</label>
+          <input
+            type="text"
+            id="full_name"
+            name="full_name"
+            placeholder="John Doe"
+            autocomplete="name"
+            required
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            placeholder="Minimum 8 characters"
+            autocomplete="new-password"
+            required
+            minlength="8"
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="confirm_password">Confirm Password</label>
+          <input
+            type="password"
+            id="confirm_password"
+            name="confirm_password"
+            placeholder="Re-enter your password"
+            autocomplete="new-password"
+            required
+          >
+        </div>
+
+        <!-- Hidden token field -->
+        <input type="hidden" id="token" name="token">
+
+        <div id="error-message" class="error-message" style="display: none;"></div>
+
+        <button type="submit" id="submit-btn" class="btn-primary">
+          <span class="btn-text">Create Account</span>
+          <span class="btn-loading" style="display: none;">
+            <span class="spinner"></span>
+            Creating...
+          </span>
+        </button>
+      </form>
+    </div>
+
+    <!-- Success Card (hidden by default) -->
+    <div id="success-card" class="card success-card" style="display: none;">
+      <div class="success-icon">&#10003;</div>
+      <h1>Registration Successful!</h1>
+      <p>Your account has been created.</p>
+      <div class="user-info">
+        <strong>Your Matrix ID:</strong>
+        <code id="matrix-id"></code>
+      </div>
+      <div class="next-steps">
+        <h3>Next Steps</h3>
+        <ol>
+          <li>Open <strong>FluffyChat</strong> on your device</li>
+          <li>Tap <strong>"Log in"</strong></li>
+          <li>Enter homeserver: <code>http://YOUR_SERVER_IP:8008</code></li>
+          <li>Login with your username and password</li>
+        </ol>
+      </div>
+      <a href="https://fluffychat.im" target="_blank" class="btn-secondary">
+        Download FluffyChat
+      </a>
+    </div>
+
+    <!-- Invalid Token Card -->
+    <div id="invalid-card" class="card error-card" style="display: none;">
+      <div class="error-icon">!</div>
+      <h1>Invalid Invite Link</h1>
+      <p>This invite link is invalid or missing a token.</p>
+      <p class="hint">Please check your email for the correct link or contact your administrator.</p>
+    </div>
+
+    <!-- Already Used Card -->
+    <div id="used-card" class="card info-card" style="display: none;">
+      <div class="info-icon">&#10003;</div>
+      <h1>Account Already Created</h1>
+      <p>You already created an account using this invite link.</p>
+      <p>Please log in using the <strong>FluffyChat</strong> app.</p>
+      <a href="https://fluffychat.im" target="_blank" class="btn-secondary">
+        Download FluffyChat
+      </a>
+    </div>
+
+    <!-- Expired Token Card -->
+    <div id="expired-card" class="card error-card" style="display: none;">
+      <div class="error-icon">&#9202;</div>
+      <h1>Invite Link Expired</h1>
+      <p>This invite link has expired.</p>
+      <p class="hint">Please contact your administrator to request a new invite.</p>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading-card" class="card" style="display: none;">
+      <div class="loading-spinner"></div>
+      <p>Validating invite link...</p>
+    </div>
+  </div>
+
+  <script src="/register.js"></script>
+</body>
+</html>
