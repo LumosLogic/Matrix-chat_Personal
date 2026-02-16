@@ -1,6 +1,8 @@
 require('dotenv').config();
 
 const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 const crypto = require('crypto');
 const axios = require('axios');
 const path = require('path');
@@ -10,9 +12,18 @@ const pool = require('./db');
 const synapsePool = require('./synapse-db');
 const locationRoutes = require('./location-routes');
 const fluffychatLocationRoutes = require('./fluffychat-location');
+const { router: callRoutes, setIoInstance } = require('./call-routes');
 const { sendBeaconInfoStop } = require('./location-helpers');
+const { setupCallSignaling } = require('./call-signaling');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
 
 const SYNAPSE_URL_FOR_PROXY = process.env.SYNAPSE_URL || 'http://localhost:8008';
 
@@ -60,6 +71,18 @@ app.use('/tiles', createProxyMiddleware({
 }));
 
 app.use(express.json());
+
+// Add CORS headers for web browsers
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
 
 // Serve static files from public directory
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -198,6 +221,15 @@ app.use('/api/location', locationRoutes);
 
 // FluffyChat direct location API (bypasses web UI)
 app.use('/api/fluffychat/location', fluffychatLocationRoutes);
+
+// Voice/Video call API routes
+app.use('/api/calls', callRoutes);
+
+// Setup WebSocket signaling for WebRTC
+setupCallSignaling(io);
+
+// Connect WebSocket instance to call routes
+setIoInstance(io);
 
 // GET /api/validate-token - Validate invite token before showing form
 app.get('/api/validate-token', async (req, res) => {
@@ -502,9 +534,10 @@ app.use((req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Matrix Enterprise Backend running on port ${PORT}`);
   console.log(`Health check: ${BASE_URL}/health`);
+  console.log(`WebSocket server ready for call signaling`);
 
   // NOTE: Bots now run as separate PM2 processes instead of child_process.fork()
   // Start them with: pm2 start ecosystem.config.js
