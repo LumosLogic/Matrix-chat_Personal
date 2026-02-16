@@ -46,6 +46,19 @@ app.use('/_synapse', createProxyMiddleware({
   },
 }));
 
+// Proxy OpenStreetMap tiles to fix "white box" issue on frontend
+app.use('/tiles', createProxyMiddleware({
+  target: 'https://a.tile.openstreetmap.org',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/tiles': '', // Remove /tiles prefix
+  },
+  onProxyRes: (proxyRes, req, res) => {
+    // Add CORS header to allow the frontend to render the tiles
+    proxyRes.headers['Access-Control-Allow-Origin'] = '*';
+  },
+}));
+
 app.use(express.json());
 
 // Serve static files from public directory
