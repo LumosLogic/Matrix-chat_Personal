@@ -3,3 +3,13 @@ node_modules/
 *.log
 
 nul
+
+# Database files
+enterprise-db/pgdata/
+synapse-db/
+*.pid
+
+# Database files
+enterprise-db/pgdata/
+synapse-db/
+*.pid
