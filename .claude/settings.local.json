@@ -46,7 +46,8 @@
       "Bash(pm2 flush:*)",
       "Bash(node:*)",
       "Bash(docker restart:*)",
-      "Bash(pm2 list:*)"
+      "Bash(pm2 list:*)",
+      "Bash(flutter pub get:*)"
     ]
   }
 }
