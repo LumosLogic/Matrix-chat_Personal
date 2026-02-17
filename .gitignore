@@ -13,3 +13,6 @@ synapse-db/
 enterprise-db/pgdata/
 synapse-db/
 *.pid
+
+# Media files
+data/media_store/
