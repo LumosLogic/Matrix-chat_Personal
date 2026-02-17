@@ -490,65 +490,87 @@ class IncomingCallDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          // Remote video (full screen)
-          if (_remoteRenderer.srcObject != null)
-            RTCVideoView(_remoteRenderer, mirror: false)
-          else
-            Center(
-              child: Text(
-                'Connecting...',
-                style: TextStyle(color: Colors.white, fontSize: 24),
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // Remote video (full screen)
+            if (_remoteRenderer.srcObject != null)
+              Positioned.fill(
+                child: RTCVideoView(_remoteRenderer, mirror: false, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover),
+              )
+            else
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: Colors.white),
+                    SizedBox(height: 16),
+                    Text('Connecting...', style: TextStyle(color: Colors.white, fontSize: 20)),
+                  ],
+                ),
               ),
-            ),
 
-          // Local video (small overlay)
-          Positioned(
-            top: 50,
-            right: 20,
-            child: Container(
-              width: 120,
-              height: 160,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white, width: 2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: RTCVideoView(_localRenderer, mirror: true),
-              ),
-            ),
-          ),
-
-          // Controls
-          Positioned(
-            bottom: 40,
-            left: 0,
-            right: 0,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                FloatingActionButton(
-                  backgroundColor: _audioEnabled ? Colors.white : Colors.red,
-                  onPressed: _toggleAudio,
-                  child: Icon(
-                    _audioEnabled ? Icons.mic : Icons.mic_off,
-                    color: _audioEnabled ? Colors.black : Colors.white,
+            // Local video (small overlay) - only for video calls
+            if (widget.callType == 'video' && _localRenderer.srcObject != null)
+              Positioned(
+                top: 50,
+                right: 20,
+                child: Container(
+                  width: 120,
+                  height: 160,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white, width: 2),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: RTCVideoView(_localRenderer, mirror: true, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover),
                   ),
                 ),
-                if (widget.callType == 'video')
+              ),
+
+            // Controls - ALWAYS visible
+            Positioned(
+              bottom: 40,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
                   FloatingActionButton(
-                    backgroundColor: _videoEnabled ? Colors.white : Colors.red,
-                    onPressed: _toggleVideo,
+                    heroTag: 'audio',
+                    backgroundColor: _audioEnabled ? Colors.white : Colors.red,
+                    onPressed: _toggleAudio,
                     child: Icon(
-                      _videoEnabled ? Icons.videocam : Icons.videocam_off,
-                      color: _videoEnabled ? Colors.black : Colors.white,
+                      _audioEnabled ? Icons.mic : Icons.mic_off,
+                      color: _audioEnabled ? Colors.black : Colors.white,
                     ),
                   ),
-                FloatingActionButton(
-                  backgroundColor: Colors.red,
-                  onPressed: _endCall,
+                  if (widget.callType == 'video')
+                    FloatingActionButton(
+                      heroTag: 'video',
+                      backgroundColor: _videoEnabled ? Colors.white : Colors.red,
+                      onPressed: _toggleVideo,
+                      child: Icon(
+                        _videoEnabled ? Icons.videocam : Icons.videocam_off,
+                        color: _videoEnabled ? Colors.black : Colors.white,
+                      ),
+                    ),
+                  FloatingActionButton(
+                    heroTag: 'end',
+                    backgroundColor: Colors.red,
+                    onPressed: _endCall,
+                    child: Icon(Icons.call_end, color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
                   child: Icon(Icons.call_end, color: Colors.white),
                 ),
               ],

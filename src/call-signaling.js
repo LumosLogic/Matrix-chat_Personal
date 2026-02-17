@@ -114,20 +114,21 @@ function setupCallSignaling(io) {
 
 // Function to notify users of incoming calls
 function notifyIncomingCall(io, callData) {
-  // Get room members and notify them
   const { roomId, callId, callType, initiatorId, baseUrl } = callData;
   
-  // For now, broadcast to all connected users
-  // In production, you'd query room members from Matrix
-  io.emit('incoming-call', {
-    callId,
-    callType,
-    roomId,
-    callerName: initiatorId,
-    baseUrl
+  // Notify all connected users EXCEPT the caller
+  io.sockets.sockets.forEach((socket) => {
+    if (socket.userId && socket.userId !== initiatorId) {
+      socket.emit('incoming-call', {
+        callId,
+        callType,
+        roomId,
+        callerName: initiatorId,
+        baseUrl
+      });
+      console.log(`[CALL] Notified ${socket.userId} of incoming call ${callId}`);
+    }
   });
-  
-  console.log(`[CALL] Incoming call notification sent for ${callId}`);
 }
 
 module.exports = { setupCallSignaling, ICE_SERVERS, notifyIncomingCall };
