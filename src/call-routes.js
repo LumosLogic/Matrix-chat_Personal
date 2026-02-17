@@ -73,14 +73,28 @@ router.post('/initiate', async (req, res) => {
       console.log('[CALL] Matrix event failed (non-critical):', err.message);
     }
 
-    // Send incoming call notification via WebSocket
+    // Get caller display name from Matrix profile
+    let callerDisplayName = userId;
+    try {
+      const profileRes = await axios.get(
+        `${SYNAPSE_URL}/_matrix/client/r0/profile/${encodeURIComponent(userId)}/displayname`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      callerDisplayName = profileRes.data.displayname || userId;
+    } catch (err) {
+      console.log('[CALL] Could not fetch display name:', err.message);
+    }
+
+    // Send incoming call notification via WebSocket - only to room members
     if (ioInstance) {
       notifyIncomingCall(ioInstance, {
         roomId,
         callId,
         callType,
         initiatorId: userId,
-        baseUrl: BASE_URL
+        callerDisplayName,
+        baseUrl: BASE_URL,
+        accessToken
       });
     }
 

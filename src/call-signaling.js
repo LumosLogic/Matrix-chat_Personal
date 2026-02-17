@@ -1,4 +1,7 @@
 const pool = require('./db');
+const axios = require('axios');
+
+const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -6,18 +9,22 @@ const ICE_SERVERS = [
   { urls: 'stun:stun2.l.google.com:19302' }
 ];
 
-// Store user socket mappings
+// Store user socket mappings - supports multiple devices per user
+// Map<userId, Set<socketId>>
 const userSockets = new Map();
 
 function setupCallSignaling(io) {
   io.on('connection', (socket) => {
     console.log(`[CALL] Client connected: ${socket.id}`);
 
-    // Register user for incoming calls
+    // Register user for incoming calls (supports multiple devices per user)
     socket.on('register-user', ({ userId }) => {
       socket.userId = userId;
-      userSockets.set(userId, socket.id);
-      console.log(`[CALL] User ${userId} registered for incoming calls`);
+      if (!userSockets.has(userId)) {
+        userSockets.set(userId, new Set());
+      }
+      userSockets.get(userId).add(socket.id);
+      console.log(`[CALL] User ${userId} registered on device ${socket.id} (${userSockets.get(userId).size} device(s))`);
     });
 
     socket.on('join-call', async ({ callId, userId }) => {
@@ -40,7 +47,7 @@ function setupCallSignaling(io) {
         [callId, socket.userId, JSON.stringify({ targetUserId })]
       );
 
-      io.to(callId).emit('webrtc-offer', { offer, fromUserId: socket.userId, targetUserId });
+      socket.to(callId).emit('webrtc-offer', { offer, fromUserId: socket.userId, targetUserId });
       console.log(`[CALL] Offer sent in ${callId} from ${socket.userId} to ${targetUserId}`);
     });
 
@@ -50,12 +57,12 @@ function setupCallSignaling(io) {
         [callId, socket.userId, JSON.stringify({ targetUserId })]
       );
 
-      io.to(callId).emit('webrtc-answer', { answer, fromUserId: socket.userId, targetUserId });
+      socket.to(callId).emit('webrtc-answer', { answer, fromUserId: socket.userId, targetUserId });
       console.log(`[CALL] Answer sent in ${callId} from ${socket.userId} to ${targetUserId}`);
     });
 
     socket.on('ice-candidate', async ({ callId, candidate, targetUserId }) => {
-      io.to(callId).emit('ice-candidate', { candidate, fromUserId: socket.userId, targetUserId });
+      socket.to(callId).emit('ice-candidate', { candidate, fromUserId: socket.userId, targetUserId });
     });
 
     socket.on('toggle-audio', async ({ callId, enabled }) => {
@@ -64,7 +71,7 @@ function setupCallSignaling(io) {
         [enabled, callId, socket.userId]
       );
 
-      io.to(callId).emit('audio-toggled', { userId: socket.userId, enabled });
+      socket.to(callId).emit('audio-toggled', { userId: socket.userId, enabled });
     });
 
     socket.on('toggle-video', async ({ callId, enabled }) => {
@@ -73,7 +80,7 @@ function setupCallSignaling(io) {
         [enabled, callId, socket.userId]
       );
 
-      io.to(callId).emit('video-toggled', { userId: socket.userId, enabled });
+      socket.to(callId).emit('video-toggled', { userId: socket.userId, enabled });
     });
 
     socket.on('leave-call', async ({ callId }) => {
@@ -96,7 +103,13 @@ function setupCallSignaling(io) {
 
     socket.on('disconnect', async () => {
       if (socket.userId) {
-        userSockets.delete(socket.userId);
+        const sockets = userSockets.get(socket.userId);
+        if (sockets) {
+          sockets.delete(socket.id);
+          if (sockets.size === 0) {
+            userSockets.delete(socket.userId);
+          }
+        }
       }
       if (socket.callId && socket.userId) {
         await pool.query(
@@ -112,23 +125,51 @@ function setupCallSignaling(io) {
   });
 }
 
-// Function to notify users of incoming calls
-function notifyIncomingCall(io, callData) {
-  const { roomId, callId, callType, initiatorId, baseUrl } = callData;
-  
-  // Notify all connected users EXCEPT the caller
+// Get room members from Matrix/Synapse
+async function getRoomMembers(roomId, accessToken) {
+  try {
+    const response = await axios.get(
+      `${SYNAPSE_URL}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/joined_members`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    return Object.keys(response.data.joined || {});
+  } catch (err) {
+    console.error('[CALL] Failed to get room members:', err.message);
+    return [];
+  }
+}
+
+// Function to notify users of incoming calls - only notifies room members
+async function notifyIncomingCall(io, callData) {
+  const { roomId, callId, callType, initiatorId, callerDisplayName, baseUrl, accessToken } = callData;
+
+  // Get actual room members from Matrix
+  const roomMembers = await getRoomMembers(roomId, accessToken);
+
+  if (roomMembers.length === 0) {
+    console.log('[CALL] No room members found, falling back to room-based notification');
+  }
+
+  let notifiedCount = 0;
+
   io.sockets.sockets.forEach((socket) => {
-    if (socket.userId && socket.userId !== initiatorId) {
-      socket.emit('incoming-call', {
-        callId,
-        callType,
-        roomId,
-        callerName: initiatorId,
-        baseUrl
-      });
-      console.log(`[CALL] Notified ${socket.userId} of incoming call ${callId}`);
-    }
+    if (!socket.userId || socket.userId === initiatorId) return;
+
+    // Only notify users who are members of the room
+    if (roomMembers.length > 0 && !roomMembers.includes(socket.userId)) return;
+
+    socket.emit('incoming-call', {
+      callId,
+      callType,
+      roomId,
+      callerName: callerDisplayName || initiatorId,
+      baseUrl
+    });
+    notifiedCount++;
+    console.log(`[CALL] Notified ${socket.userId} of incoming call ${callId} from ${initiatorId}`);
   });
+
+  console.log(`[CALL] Total ${notifiedCount} user(s) notified for call ${callId} in room ${roomId}`);
 }
 
 module.exports = { setupCallSignaling, ICE_SERVERS, notifyIncomingCall };

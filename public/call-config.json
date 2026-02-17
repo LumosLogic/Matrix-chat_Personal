@@ -1,5 +1,5 @@
 {
-    "websocketUrl":  "http://192.168.1.17:3000",
-    "baseUrl":  "http://192.168.1.17:3000",
-    "homeserverUrl":  "http://192.168.1.17:8008"
+    "baseUrl": "http://192.168.1.18:3000",
+    "websocketUrl": "http://192.168.1.18:3000",
+    "homeserverUrl": "http://192.168.1.18:8008"
 }
