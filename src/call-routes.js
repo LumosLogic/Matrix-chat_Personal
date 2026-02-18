@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios');
 const pool = require('./db');
-const { ICE_SERVERS, notifyIncomingCall } = require('./call-signaling');
+const { ICE_SERVERS, notifyIncomingCall, userSockets } = require('./call-signaling');
 
 const router = express.Router();
 
@@ -235,6 +235,28 @@ router.post('/:callId/reject', async (req, res) => {
     }
 
     await client.query('COMMIT');
+
+    // Notify the caller that the call was rejected via WebSocket
+    if (ioInstance) {
+      // Find the initiator of this call
+      const initiatorResult = await pool.query(
+        `SELECT initiator_id FROM call_sessions WHERE call_id = $1`,
+        [callId]
+      );
+      if (initiatorResult.rows.length > 0) {
+        const initiatorId = initiatorResult.rows[0].initiator_id;
+        const initiatorSockets = userSockets.get(initiatorId);
+        if (initiatorSockets) {
+          initiatorSockets.forEach(socketId => {
+            ioInstance.to(socketId).emit('call-rejected', {
+              callId,
+              rejectedBy: userId
+            });
+          });
+          console.log(`[CALL] Notified ${initiatorId} that call ${callId} was rejected by ${userId}`);
+        }
+      }
+    }
 
     res.json({ callId, status: 'rejected' });
   } catch (error) {

@@ -48,7 +48,8 @@
       "Bash(docker restart:*)",
       "Bash(pm2 list:*)",
       "Bash(flutter pub get:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(dart pub deps:*)"
     ]
   }
 }
