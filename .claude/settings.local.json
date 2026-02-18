@@ -49,7 +49,17 @@
       "Bash(pm2 list:*)",
       "Bash(flutter pub get:*)",
       "Bash(chmod:*)",
-      "Bash(dart pub deps:*)"
+      "Bash(dart pub deps:*)",
+      "Bash(gh api:*)",
+      "Bash(grep:*)",
+      "Bash(xargs:*)",
+      "Bash(while read f)",
+      "Bash(do grep -l \"decryption\\\\|decrypt.*message\\\\|readableFormat\" \"$f\")",
+      "Bash(done)",
+      "Bash(do grep -l \"importantContentBloc\\\\|initMatrix\\\\|onLogin\" \"$f\")",
+      "WebFetch(domain:pub.dev)",
+      "WebFetch(domain:element.io)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const crypto = require('crypto');
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
 // Bots run as separate PM2 processes (see ecosystem.config.js)
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const pool = require('./db');
@@ -89,6 +90,18 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+
+// Reads the live Cloudflare tunnel URL from tunnel.log (written by cloudflared).
+// Falls back to BASE_URL from .env if no tunnel is running.
+const TUNNEL_LOG = path.join(__dirname, '..', 'tunnel.log');
+function getBaseUrl() {
+  try {
+    const log = fs.readFileSync(TUNNEL_LOG, 'utf8');
+    const matches = log.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/g);
+    if (matches) return matches[matches.length - 1]; // last = most recent tunnel URL
+  } catch (_) {}
+  return BASE_URL;
+}
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const SYNAPSE_ADMIN_TOKEN = process.env.SYNAPSE_ADMIN_TOKEN;
 const SYNAPSE_SERVER_NAME = process.env.SYNAPSE_SERVER_NAME || 'localhost';
@@ -122,6 +135,19 @@ app.get('/health', async (req, res) => {
     console.error('Health check DB error:', error.message);
     res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: error.message });
   }
+});
+
+// ===== CALL SERVER CONFIG ENDPOINT =====
+// Returns the correct call server URL (tunnel URL if available) so clients can connect correctly
+app.get('/call-config.json', (req, res) => {
+  res.json({
+    baseUrl: getBaseUrl(),
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' }
+    ]
+  });
 });
 
 // ===== .WELL-KNOWN ENDPOINTS (for Matrix client/server discovery) =====
@@ -175,7 +201,7 @@ app.post('/invites', requireAdmin, async (req, res) => {
     );
 
     const invite = result.rows[0];
-    const inviteLink = `${BASE_URL}/register?token=${token}`;
+    const inviteLink = `${getBaseUrl()}/register?token=${token}`;
 
     res.status(201).json({
       success: true,

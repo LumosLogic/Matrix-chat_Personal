@@ -1,13 +1,26 @@
 const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 const pool = require('./db');
-const { ICE_SERVERS, notifyIncomingCall, userSockets } = require('./call-signaling');
+const { ICE_SERVERS, notifyIncomingCall, notifyCallEnded, userSockets } = require('./call-signaling');
 
 const router = express.Router();
 
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const TUNNEL_LOG = path.join(__dirname, '..', 'tunnel.log');
+
+// Returns the live tunnel URL if available, else falls back to BASE_URL
+function getBaseUrl() {
+  try {
+    const log = fs.readFileSync(TUNNEL_LOG, 'utf8');
+    const matches = log.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/g);
+    if (matches) return matches[matches.length - 1];
+  } catch (_) {}
+  return BASE_URL;
+}
 
 // Store io instance
 let ioInstance = null;
@@ -47,7 +60,7 @@ router.post('/initiate', async (req, res) => {
     const callId = generateCallId();
 
     await client.query(
-      `INSERT INTO call_sessions (call_id, room_id, call_type, status, initiator_id) 
+      `INSERT INTO call_sessions (call_id, room_id, call_type, status, initiator_id)
        VALUES ($1, $2, $3, 'ringing', $4)`,
       [callId, roomId, callType, userId]
     );
@@ -86,6 +99,7 @@ router.post('/initiate', async (req, res) => {
     }
 
     // Send incoming call notification via WebSocket - only to room members
+    // NOTE: baseUrl is not sent in the socket event - clients use their own derived URL
     if (ioInstance) {
       notifyIncomingCall(ioInstance, {
         roomId,
@@ -93,17 +107,17 @@ router.post('/initiate', async (req, res) => {
         callType,
         initiatorId: userId,
         callerDisplayName,
-        baseUrl: BASE_URL,
+        baseUrl: getBaseUrl(),
         accessToken
       });
     }
 
     await client.query('COMMIT');
 
-    res.status(201).json({ 
-      callId, 
-      roomId, 
-      callType, 
+    res.status(201).json({
+      callId,
+      roomId,
+      callType,
       status: 'ringing',
       iceServers: ICE_SERVERS
     });
@@ -130,7 +144,7 @@ router.post('/:callId/answer', async (req, res) => {
     await client.query('BEGIN');
 
     const result = await client.query(
-      `SELECT room_id, status FROM call_sessions WHERE call_id = $1`,
+      `SELECT room_id, status, initiator_id FROM call_sessions WHERE call_id = $1`,
       [callId]
     );
 
@@ -139,7 +153,7 @@ router.post('/:callId/answer', async (req, res) => {
       return res.status(404).json({ error: 'Call not found' });
     }
 
-    const { room_id, status } = result.rows[0];
+    const { room_id, status, initiator_id } = result.rows[0];
 
     if (status !== 'ringing') {
       await client.query('ROLLBACK');
@@ -152,7 +166,7 @@ router.post('/:callId/answer', async (req, res) => {
     );
 
     await client.query(
-      `INSERT INTO call_participants (call_id, matrix_user_id, status, joined_at) 
+      `INSERT INTO call_participants (call_id, matrix_user_id, status, joined_at)
        VALUES ($1, $2, 'joined', NOW())
        ON CONFLICT DO NOTHING`,
       [callId, userId]
@@ -173,6 +187,16 @@ router.post('/:callId/answer', async (req, res) => {
     }
 
     await client.query('COMMIT');
+
+    // Notify the initiator that the call was answered via socket
+    if (ioInstance && initiator_id) {
+      const initiatorSockets = userSockets.get(initiator_id);
+      if (initiatorSockets) {
+        initiatorSockets.forEach(socketId => {
+          ioInstance.to(socketId).emit('call-answered', { callId, answeredBy: userId });
+        });
+      }
+    }
 
     res.json({ callId, status: 'active', iceServers: ICE_SERVERS });
   } catch (error) {
@@ -198,7 +222,7 @@ router.post('/:callId/reject', async (req, res) => {
     await client.query('BEGIN');
 
     const result = await client.query(
-      `SELECT room_id FROM call_sessions WHERE call_id = $1`,
+      `SELECT room_id, initiator_id FROM call_sessions WHERE call_id = $1`,
       [callId]
     );
 
@@ -207,7 +231,7 @@ router.post('/:callId/reject', async (req, res) => {
       return res.status(404).json({ error: 'Call not found' });
     }
 
-    const { room_id } = result.rows[0];
+    const { room_id, initiator_id } = result.rows[0];
 
     await client.query(
       `UPDATE call_sessions SET status = 'rejected', ended_at = NOW() WHERE call_id = $1`,
@@ -237,24 +261,16 @@ router.post('/:callId/reject', async (req, res) => {
     await client.query('COMMIT');
 
     // Notify the caller that the call was rejected via WebSocket
-    if (ioInstance) {
-      // Find the initiator of this call
-      const initiatorResult = await pool.query(
-        `SELECT initiator_id FROM call_sessions WHERE call_id = $1`,
-        [callId]
-      );
-      if (initiatorResult.rows.length > 0) {
-        const initiatorId = initiatorResult.rows[0].initiator_id;
-        const initiatorSockets = userSockets.get(initiatorId);
-        if (initiatorSockets) {
-          initiatorSockets.forEach(socketId => {
-            ioInstance.to(socketId).emit('call-rejected', {
-              callId,
-              rejectedBy: userId
-            });
+    if (ioInstance && initiator_id) {
+      const initiatorSockets = userSockets.get(initiator_id);
+      if (initiatorSockets) {
+        initiatorSockets.forEach(socketId => {
+          ioInstance.to(socketId).emit('call-rejected', {
+            callId,
+            rejectedBy: userId
           });
-          console.log(`[CALL] Notified ${initiatorId} that call ${callId} was rejected by ${userId}`);
-        }
+        });
+        console.log(`[CALL] Notified ${initiator_id} that call ${callId} was rejected by ${userId}`);
       }
     }
 
@@ -299,7 +315,7 @@ router.post('/:callId/end', async (req, res) => {
     );
 
     await client.query(
-      `UPDATE call_participants SET status = 'left', left_at = NOW() 
+      `UPDATE call_participants SET status = 'left', left_at = NOW()
        WHERE call_id = $1 AND status = 'joined'`,
       [callId]
     );
@@ -323,6 +339,12 @@ router.post('/:callId/end', async (req, res) => {
 
     await client.query('COMMIT');
 
+    // Notify all other call participants via socket that the call has ended
+    if (ioInstance) {
+      notifyCallEnded(ioInstance, callId, userId);
+      console.log(`[CALL] Notified call ${callId} ended by ${userId}`);
+    }
+
     res.json({ callId, status: 'ended' });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -344,7 +366,7 @@ router.post('/:callId/offer', async (req, res) => {
 
   try {
     await pool.query(
-      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata) 
+      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata)
        VALUES ($1, $2, 'webrtc_offer', $3)`,
       [callId, userId, JSON.stringify({ offer })]
     );
@@ -367,7 +389,7 @@ router.post('/:callId/answer-sdp', async (req, res) => {
 
   try {
     await pool.query(
-      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata) 
+      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata)
        VALUES ($1, $2, 'webrtc_answer', $3)`,
       [callId, userId, JSON.stringify({ answer })]
     );
@@ -390,7 +412,7 @@ router.post('/:callId/ice-candidate', async (req, res) => {
 
   try {
     await pool.query(
-      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata) 
+      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata)
        VALUES ($1, $2, 'ice_candidate', $3)`,
       [callId, userId, JSON.stringify({ candidate })]
     );
@@ -417,7 +439,7 @@ router.get('/:callId/status', async (req, res) => {
     }
 
     const participantsResult = await pool.query(
-      `SELECT matrix_user_id, status, audio_enabled, video_enabled, joined_at, left_at 
+      `SELECT matrix_user_id, status, audio_enabled, video_enabled, joined_at, left_at
        FROM call_participants WHERE call_id = $1`,
       [callId]
     );
@@ -432,7 +454,7 @@ router.get('/:callId/status', async (req, res) => {
   }
 });
 
-// GET /api/calls/active - Get user's active calls
+// GET /api/calls/active - Get user's active/ringing calls (for polling on reconnect)
 router.get('/active', async (req, res) => {
   const { userId } = req.query;
 
@@ -441,15 +463,19 @@ router.get('/active', async (req, res) => {
   }
 
   try {
+    // Find ringing calls in rooms where this user is a member
+    // (calls where user is NOT the initiator - i.e., incoming calls)
     const result = await pool.query(
-      `SELECT DISTINCT cs.* FROM call_sessions cs
-       JOIN call_participants cp ON cs.call_id = cp.call_id
-       WHERE cp.matrix_user_id = $1 AND cs.status IN ('ringing', 'active')
+      `SELECT cs.call_id, cs.room_id, cs.call_type, cs.initiator_id, cs.status, cs.created_at
+       FROM call_sessions cs
+       WHERE cs.status = 'ringing'
+       AND cs.initiator_id != $1
+       AND cs.created_at > NOW() - INTERVAL '90 seconds'
        ORDER BY cs.created_at DESC`,
       [userId]
     );
 
-    res.json({ calls: result.rows });
+    res.json({ calls: result.rows, iceServers: ICE_SERVERS });
   } catch (error) {
     console.error('[CALL] Active calls error:', error);
     res.status(500).json({ error: 'Failed to get active calls' });
@@ -467,13 +493,13 @@ router.post('/:callId/toggle-audio', async (req, res) => {
 
   try {
     await pool.query(
-      `UPDATE call_participants SET audio_enabled = $1 
+      `UPDATE call_participants SET audio_enabled = $1
        WHERE call_id = $2 AND matrix_user_id = $3`,
       [enabled, callId, userId]
     );
 
     await pool.query(
-      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata) 
+      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata)
        VALUES ($1, $2, 'audio_toggled', $3)`,
       [callId, userId, JSON.stringify({ enabled })]
     );
@@ -496,13 +522,13 @@ router.post('/:callId/toggle-video', async (req, res) => {
 
   try {
     await pool.query(
-      `UPDATE call_participants SET video_enabled = $1 
+      `UPDATE call_participants SET video_enabled = $1
        WHERE call_id = $2 AND matrix_user_id = $3`,
       [enabled, callId, userId]
     );
 
     await pool.query(
-      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata) 
+      `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata)
        VALUES ($1, $2, 'video_toggled', $3)`,
       [callId, userId, JSON.stringify({ enabled })]
     );
