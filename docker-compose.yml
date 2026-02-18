@@ -1,9 +1,9 @@
 version: "3.9"
 
 services:
-  synapse-db:
+  postgres:
     image: postgres:15
-    container_name: synapse-postgres
+    container_name: matrix-postgres
     environment:
       POSTGRES_DB: synapse_db
       POSTGRES_USER: synapse_user
@@ -12,9 +12,10 @@ services:
       TZ: "Asia/Kolkata"
     command: postgres -c timezone=Asia/Kolkata
     volumes:
-      - ./synapse-db:/var/lib/postgresql/data
+      - ./postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     ports:
-    - "5433:5432" 
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U synapse_user -d synapse_db"]
       interval: 5s
@@ -22,24 +23,11 @@ services:
       retries: 5
     restart: unless-stopped
 
-  enterprise-postgres:
-    image: postgres:15
-    container_name: enterprise-postgres
-    environment:
-      POSTGRES_DB: enterprise_db
-      POSTGRES_USER: enterprise_user
-      POSTGRES_PASSWORD: enterprise_pass
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./enterprise-db/pgdata:/var/lib/postgresql/data
-    restart: unless-stopped
-
   synapse:
     image: matrixdotorg/synapse:latest
     container_name: synapse
     depends_on:
-      synapse-db:
+      postgres:
         condition: service_healthy
     volumes:
       - ./data:/data

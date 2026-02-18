@@ -47,7 +47,12 @@ function setupCallSignaling(io) {
         [callId, socket.userId, JSON.stringify({ targetUserId })]
       );
 
-      socket.to(callId).emit('webrtc-offer', { offer, fromUserId: socket.userId, targetUserId });
+      const targetSockets = userSockets.get(targetUserId);
+      if (targetSockets) {
+        targetSockets.forEach(targetSocketId => {
+          io.to(targetSocketId).emit('webrtc-offer', { offer, fromUserId: socket.userId, targetUserId });
+        });
+      }
       console.log(`[CALL] Offer sent in ${callId} from ${socket.userId} to ${targetUserId}`);
     });
 
@@ -57,12 +62,22 @@ function setupCallSignaling(io) {
         [callId, socket.userId, JSON.stringify({ targetUserId })]
       );
 
-      socket.to(callId).emit('webrtc-answer', { answer, fromUserId: socket.userId, targetUserId });
+      const targetSockets = userSockets.get(targetUserId);
+      if (targetSockets) {
+        targetSockets.forEach(targetSocketId => {
+          io.to(targetSocketId).emit('webrtc-answer', { answer, fromUserId: socket.userId, targetUserId });
+        });
+      }
       console.log(`[CALL] Answer sent in ${callId} from ${socket.userId} to ${targetUserId}`);
     });
 
     socket.on('ice-candidate', async ({ callId, candidate, targetUserId }) => {
-      socket.to(callId).emit('ice-candidate', { candidate, fromUserId: socket.userId, targetUserId });
+      const targetSockets = userSockets.get(targetUserId);
+      if (targetSockets) {
+        targetSockets.forEach(targetSocketId => {
+          io.to(targetSocketId).emit('ice-candidate', { candidate, fromUserId: socket.userId, targetUserId });
+        });
+      }
     });
 
     socket.on('toggle-audio', async ({ callId, enabled }) => {
@@ -152,21 +167,23 @@ async function notifyIncomingCall(io, callData) {
 
   let notifiedCount = 0;
 
-  io.sockets.sockets.forEach((socket) => {
-    if (!socket.userId || socket.userId === initiatorId) return;
+  const potentialRecipients = roomMembers.filter(memberId => memberId !== initiatorId);
 
-    // Only notify users who are members of the room
-    if (roomMembers.length > 0 && !roomMembers.includes(socket.userId)) return;
-
-    socket.emit('incoming-call', {
-      callId,
-      callType,
-      roomId,
-      callerName: callerDisplayName || initiatorId,
-      baseUrl
-    });
-    notifiedCount++;
-    console.log(`[CALL] Notified ${socket.userId} of incoming call ${callId} from ${initiatorId}`);
+  potentialRecipients.forEach(recipientId => {
+    const sockets = userSockets.get(recipientId);
+    if (sockets) {
+      sockets.forEach(socketId => {
+        io.to(socketId).emit('incoming-call', {
+          callId,
+          callType,
+          roomId,
+          callerName: callerDisplayName || initiatorId,
+          baseUrl
+        });
+        notifiedCount++;
+        console.log(`[CALL] Notified ${recipientId} on device ${socketId} of incoming call ${callId} from ${initiatorId}`);
+      });
+    }
   });
 
   console.log(`[CALL] Total ${notifiedCount} user(s) notified for call ${callId} in room ${roomId}`);

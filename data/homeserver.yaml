@@ -27,7 +27,7 @@ database:
     user: synapse_user
     password: synapse_pass
     database: synapse_db
-    host: synapse-db
+    host: postgres
     port: 5432
     cp_min: 5
     cp_max: 10
