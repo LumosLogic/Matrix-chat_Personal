@@ -27,7 +27,7 @@ database:
     user: synapse_user
     password: synapse_pass
     database: synapse_db
-    host: postgres
+    host: synapse-db
     port: 5432
     cp_min: 5
     cp_max: 10
@@ -60,6 +60,10 @@ signing_key_path: "/data/localhost.signing.key"
 
 trusted_key_servers:
   - server_name: "matrix.org"
+
+# --- E2EE ENABLED (auto-bootstrap handles key management seamlessly) ---
+encryption_enabled_by_default_for_room_type: "all"
+# ---------------------------------
 
 # --- LOCATION SHARING SUPPORT (MSC3488 & MSC3672) ---
 experimental_features:
