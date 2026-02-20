@@ -16,3 +16,4 @@ synapse-db/
 
 # Media files
 data/media_store/
+synapse-db/
