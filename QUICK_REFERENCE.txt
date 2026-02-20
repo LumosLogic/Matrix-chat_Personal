@@ -1,0 +1,100 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    FRONTEND FIX - QUICK REFERENCE                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📍 FILE TO MODIFY
+  lib/widgets/matrix.dart (line ~115 in _fetchCallConfig method)
+
+❌ CURRENT CODE (WRONG)
+  final configUrl = Uri.parse('${client.homeserver}/call-config.json');
+  // Fetches from port 8008 → 404 error → WebSocket loop
+
+✅ FIXED CODE (CORRECT)
+  final homeserverUri = client.homeserver;
+  final callBackendUrl = Uri.parse(
+    '${homeserverUri?.scheme ?? 'http'}://${homeserverUri?.host}:3000/call-config.json'
+  );
+  final response = await http.get(callBackendUrl);
+  // Fetches from port 3000 → Success → WebSocket connects
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🏗️  ARCHITECTURE OVERVIEW
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                         FluffyChat App                          │
+  └─────────────────────────────────────────────────────────────────┘
+                    │                              │
+                    │                              │
+         ┌──────────▼──────────┐        ┌─────────▼──────────┐
+         │   Matrix Protocol   │        │   Call Features    │
+         │   (Auth, Rooms,     │        │   (Voice, Video,   │
+         │    Messages)        │        │    WebRTC)         │
+         └──────────┬──────────┘        └─────────┬──────────┘
+                    │                              │
+                    │                              │
+         ┌──────────▼──────────┐        ┌─────────▼──────────┐
+         │  Synapse Homeserver │        │   Call Backend     │
+         │    Port: 8008       │        │    Port: 3000      │
+         │  /_matrix/* APIs    │        │  /call-config.json │
+         └─────────────────────┘        │  /api/calls/*      │
+                                        │  WebSocket: :3000  │
+                                        └────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 WHY THE SPLIT?
+
+  Port 8008 (Synapse)     → Standard Matrix protocol only
+  Port 3000 (Call Backend) → Custom WebRTC implementation for:
+                            • Call recording & analytics
+                            • Advanced screen sharing
+                            • Custom call UI/UX
+                            • Better signaling control
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ BACKEND STATUS (READY)
+
+  Health Check:
+  $ curl http://192.168.1.22:3000/health
+  {"status":"healthy","database":"connected"}
+
+  Call Config:
+  $ curl http://192.168.1.22:3000/call-config.json
+  {
+    "baseUrl": "http://192.168.1.22:3000",
+    "websocketUrl": "http://192.168.1.22:3000",
+    "homeserverUrl": "http://192.168.1.22:8008",
+    "iceServers": [...]
+  }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 TESTING CHECKLIST
+
+  After implementing the fix:
+  
+  ☐ FluffyChat successfully fetches call-config.json on startup
+  ☐ No 404 errors in logs for /call-config.json
+  ☐ WebSocket connects to ws://192.168.1.22:3000
+  ☐ Log shows: "[CallSocketService] Connected successfully"
+  ☐ No more connection loop (connect/disconnect/connect)
+  ☐ Incoming call notifications work
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📞 SUPPORT
+
+  Backend Logs:  pm2 logs matrix-server
+  Backend Path:  /Users/nipampranav/Downloads/LUMOS LOGIC/matrix-server
+  Full Docs:     FRONTEND_FIX_REQUIRED.md
+  Claude Prompt: CLAUDE_PROMPT_FOR_FRONTEND.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 ONE-LINE SUMMARY
+
+  Change call-config.json fetch from port 8008 → port 3000 in matrix.dart
+
+╚══════════════════════════════════════════════════════════════════════════════╝

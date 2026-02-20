@@ -5,7 +5,7 @@ module.exports = {
   apps: [
     {
       name: 'cloudflare-tunnel',
-      script: '/usr/local/opt/cloudflared/bin/cloudflared',
+      script: '/usr/local/bin/cloudflared',
       args: 'tunnel --url http://localhost:3000',
       interpreter: 'none',
       autorestart: true,

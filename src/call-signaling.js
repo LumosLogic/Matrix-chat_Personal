@@ -20,6 +20,9 @@ const callParticipants = new Map();
 // Map<userId, Array<callData>> - cleared after 90 seconds
 const pendingCallNotifications = new Map();
 
+// Store timers for pending call acceptances (callId -> Map<userId, timeoutId>)
+const callAcceptanceTimeouts = new Map();
+
 function setupCallSignaling(io) {
   io.on('connection', (socket) => {
     console.log(`[CALL] Client connected: ${socket.id}`);
@@ -77,6 +80,13 @@ function setupCallSignaling(io) {
 
       socket.to(callId).emit('user-joined', { userId });
       console.log(`[CALL] ${userId} joined call ${callId}`);
+
+      // Clear the call acceptance timeout if it exists
+      if (callAcceptanceTimeouts.has(callId)) {
+        clearTimeout(callAcceptanceTimeouts.get(callId));
+        callAcceptanceTimeouts.delete(callId);
+        console.log(`[CALL] Cleared acceptance timeout for call ${callId} as ${userId} joined.`);
+      }
     });
 
     // Helper: send to a specific user or broadcast to all call participants (excluding sender)
@@ -193,6 +203,38 @@ function setupCallSignaling(io) {
       }
     });
 
+    socket.on('call-ended', async ({ callId }) => {
+      console.log(`[CALL] Call ${callId} ended via explicit 'call-ended' event`);
+      try {
+        // Update call_sessions status to 'ended'
+        await pool.query(
+          `UPDATE call_sessions SET status = 'ended', ended_at = NOW() WHERE call_id = $1`,
+          [callId]
+        );
+
+        // Mark all participants as 'left'
+        await pool.query(
+          `UPDATE call_participants SET status = 'left', left_at = NOW() WHERE call_id = $1 AND status = 'joined'`,
+          [callId]
+        );
+
+        // Clean up internal state
+        callParticipants.delete(callId);
+
+        // Clear the call acceptance timeout if it exists
+        if (callAcceptanceTimeouts.has(callId)) {
+          clearTimeout(callAcceptanceTimeouts.get(callId));
+          callAcceptanceTimeouts.delete(callId);
+          console.log(`[CALL] Cleared acceptance timeout for call ${callId} due to explicit end.`);
+        }
+
+        // Notify others in the call that the call has ended
+        io.to(callId).emit('call-ended', { callId, endedBy: socket.userId });
+      } catch (err) {
+        console.error('[CALL] DB error on call-ended event:', err.message);
+      }
+    });
+
     socket.on('disconnect', async () => {
       if (socket.userId) {
         const sockets = userSockets.get(socket.userId);
@@ -243,26 +285,74 @@ async function notifyIncomingCall(io, callData) {
   const roomMembers = await getRoomMembers(roomId, accessToken);
 
   if (roomMembers.length === 0) {
-    console.log('[CALL] No room members found, falling back to room-based notification');
+    console.log(`[CALL] WARNING: No room members returned for room ${roomId}. Check SYNAPSE_URL and accessToken.`);
+    return;
   }
+
+  console.log(`[CALL] Room ${roomId} has ${roomMembers.length} member(s): ${roomMembers.join(', ')}`);
 
   let notifiedCount = 0;
   let pendingCount = 0;
 
   const potentialRecipients = roomMembers.filter(memberId => memberId !== initiatorId);
 
+  if (potentialRecipients.length === 0) {
+    console.log(`[CALL] No recipients to notify (caller is the only room member)`);
+    return;
+  }
+
   const callEvent = {
+    eventType: 'incoming_call', // Add this to explicitly mark it as an incoming call
     callId,
     callType,
     roomId,
     callerName: callerDisplayName || initiatorId,
     callerId: initiatorId,
-    // NOTE: baseUrl is intentionally not included here - the client will use its own derived URL
-    // to avoid issues with local IP vs tunnel URL mismatches
     iceServers: ICE_SERVERS
   };
 
-  potentialRecipients.forEach(recipientId => {
+  // Start 60-second timer for call acceptance if not already started
+  if (!callAcceptanceTimeouts.has(callId)) {
+    const timeoutId = setTimeout(async () => {
+      console.log(`[CALL] Call ${callId} timed out: not accepted within 60 seconds.`);
+      try {
+        // Update call_sessions status to 'ended'
+        await pool.query(
+          `UPDATE call_sessions SET status = 'ended', ended_at = NOW() WHERE call_id = $1`,
+          [callId]
+        );
+
+        // Mark all participants as 'timed_out'
+        await pool.query(
+          `UPDATE call_participants SET status = 'timed_out', left_at = NOW() WHERE call_id = $1 AND status = 'invited'`,
+          [callId]
+        );
+        // Clear internal state for this call
+        callParticipants.delete(callId);
+        callAcceptanceTimeouts.delete(callId);
+        // Notify any remaining active sockets in the call room that the call has ended
+        io.to(callId).emit('call-ended', { callId, endedBy: 'system' });
+      } catch (err) {
+        console.error('[CALL] DB error on call acceptance timeout:', err.message);
+      }
+    }, 60000); // 60 seconds
+    callAcceptanceTimeouts.set(callId, timeoutId);
+    console.log(`[CALL] Started 60-second acceptance timer for call ${callId}`);
+  }
+
+  // Store each recipient as an 'invited' participant in the DB so /active polling works
+  for (const recipientId of potentialRecipients) {
+    try {
+      await pool.query(
+        `INSERT INTO call_participants (call_id, matrix_user_id, status)
+         VALUES ($1, $2, 'invited')
+         ON CONFLICT (call_id, matrix_user_id) DO NOTHING`,
+        [callId, recipientId]
+      );
+    } catch (err) {
+      console.error(`[CALL] Failed to insert invited participant ${recipientId}:`, err.message);
+    }
+
     const sockets = userSockets.get(recipientId);
     if (sockets && sockets.size > 0) {
       sockets.forEach(socketId => {
@@ -292,7 +382,7 @@ async function notifyIncomingCall(io, callData) {
         }
       }, 90000);
     }
-  });
+  }
 
   console.log(`[CALL] Call ${callId}: ${notifiedCount} user(s) notified live, ${pendingCount} stored as pending`);
 }

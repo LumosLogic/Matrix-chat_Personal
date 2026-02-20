@@ -54,6 +54,7 @@ router.post('/initiate', async (req, res) => {
   }
 
   const client = await pool.connect();
+  let clientReleased = false;
   try {
     await client.query('BEGIN');
 
@@ -98,21 +99,10 @@ router.post('/initiate', async (req, res) => {
       console.log('[CALL] Could not fetch display name:', err.message);
     }
 
-    // Send incoming call notification via WebSocket - only to room members
-    // NOTE: baseUrl is not sent in the socket event - clients use their own derived URL
-    if (ioInstance) {
-      notifyIncomingCall(ioInstance, {
-        roomId,
-        callId,
-        callType,
-        initiatorId: userId,
-        callerDisplayName,
-        baseUrl: getBaseUrl(),
-        accessToken
-      });
-    }
-
+    // COMMIT before notifying — callee's pending-call DB check must see 'ringing' status
     await client.query('COMMIT');
+    clientReleased = true;
+    client.release();
 
     res.status(201).json({
       callId,
@@ -121,12 +111,35 @@ router.post('/initiate', async (req, res) => {
       status: 'ringing',
       iceServers: ICE_SERVERS
     });
+
+    // Notify AFTER commit: queries Matrix for room members, stores each as 'invited'
+    // participant in DB, then emits incoming-call to their sockets (or queues as pending)
+    if (ioInstance) {
+      try {
+        await notifyIncomingCall(ioInstance, {
+          roomId,
+          callId,
+          callType,
+          initiatorId: userId,
+          callerDisplayName,
+          accessToken
+        });
+      } catch (err) {
+        console.error('[CALL] notifyIncomingCall error:', err);
+      }
+    }
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (!clientReleased) {
+      await client.query('ROLLBACK');
+    }
     console.error('[CALL] Initiate error:', error);
-    res.status(500).json({ error: 'Failed to initiate call' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to initiate call' });
+    }
   } finally {
-    client.release();
+    if (!clientReleased) {
+      client.release();
+    }
   }
 });
 
@@ -165,10 +178,18 @@ router.post('/:callId/answer', async (req, res) => {
       [callId]
     );
 
+    // Upsert participant: update to 'joined' if already 'invited', otherwise insert fresh
+    await client.query(
+      `UPDATE call_participants SET status = 'joined', joined_at = NOW()
+       WHERE call_id = $1 AND matrix_user_id = $2`,
+      [callId, userId]
+    );
     await client.query(
       `INSERT INTO call_participants (call_id, matrix_user_id, status, joined_at)
-       VALUES ($1, $2, 'joined', NOW())
-       ON CONFLICT DO NOTHING`,
+       SELECT $1, $2, 'joined', NOW()
+       WHERE NOT EXISTS (
+         SELECT 1 FROM call_participants WHERE call_id = $1 AND matrix_user_id = $2
+       )`,
       [callId, userId]
     );
 
@@ -424,6 +445,39 @@ router.post('/:callId/ice-candidate', async (req, res) => {
   }
 });
 
+// GET /api/calls/active - Get user's ringing incoming calls (for polling on reconnect)
+// MUST be defined before /:callId/status to avoid route shadowing
+router.get('/active', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId required' });
+  }
+
+  try {
+    // Only return ringing calls where this user is listed as an 'invited' participant
+    // (i.e., they are a room member but not the initiator).
+    // call_participants is populated by notifyIncomingCall when the call is created.
+    const result = await pool.query(
+      `SELECT cs.call_id, cs.room_id, cs.call_type, cs.initiator_id, cs.status, cs.created_at
+       FROM call_sessions cs
+       JOIN call_participants cp ON cp.call_id = cs.call_id
+       WHERE cs.status = 'ringing'
+       AND cs.initiator_id != $1
+       AND cp.matrix_user_id = $1
+       AND cp.status = 'invited'
+       AND cs.created_at > NOW() - INTERVAL '90 seconds'
+       ORDER BY cs.created_at DESC`,
+      [userId]
+    );
+
+    res.json({ calls: result.rows, iceServers: ICE_SERVERS });
+  } catch (error) {
+    console.error('[CALL] Active calls error:', error);
+    res.status(500).json({ error: 'Failed to get active calls' });
+  }
+});
+
 // GET /api/calls/:callId/status - Get call status
 router.get('/:callId/status', async (req, res) => {
   const { callId } = req.params;
@@ -451,34 +505,6 @@ router.get('/:callId/status', async (req, res) => {
   } catch (error) {
     console.error('[CALL] Status error:', error);
     res.status(500).json({ error: 'Failed to get call status' });
-  }
-});
-
-// GET /api/calls/active - Get user's active/ringing calls (for polling on reconnect)
-router.get('/active', async (req, res) => {
-  const { userId } = req.query;
-
-  if (!userId) {
-    return res.status(400).json({ error: 'userId required' });
-  }
-
-  try {
-    // Find ringing calls in rooms where this user is a member
-    // (calls where user is NOT the initiator - i.e., incoming calls)
-    const result = await pool.query(
-      `SELECT cs.call_id, cs.room_id, cs.call_type, cs.initiator_id, cs.status, cs.created_at
-       FROM call_sessions cs
-       WHERE cs.status = 'ringing'
-       AND cs.initiator_id != $1
-       AND cs.created_at > NOW() - INTERVAL '90 seconds'
-       ORDER BY cs.created_at DESC`,
-      [userId]
-    );
-
-    res.json({ calls: result.rows, iceServers: ICE_SERVERS });
-  } catch (error) {
-    console.error('[CALL] Active calls error:', error);
-    res.status(500).json({ error: 'Failed to get active calls' });
   }
 });
 

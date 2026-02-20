@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 // Bots run as separate PM2 processes (see ecosystem.config.js)
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const pool = require('./db');
@@ -37,6 +38,7 @@ app.use('/_matrix', createProxyMiddleware({
   ws: true,
   timeout: 30000,
   proxyTimeout: 30000,
+  pathRewrite: { '^/': '/_matrix/' }, // Express strips /_matrix prefix — restore it
   onError: (err, req, res) => {
     console.error('[PROXY] Matrix API proxy error:', err.message);
     if (!res.headersSent) {
@@ -50,6 +52,7 @@ app.use('/_synapse', createProxyMiddleware({
   changeOrigin: true,
   timeout: 30000,
   proxyTimeout: 30000,
+  pathRewrite: { '^/': '/_synapse/' }, // Express strips /_synapse prefix — restore it
   onError: (err, req, res) => {
     console.error('[PROXY] Synapse admin proxy error:', err.message);
     if (!res.headersSent) {
@@ -88,11 +91,23 @@ app.use((req, res, next) => {
 // Serve static files from public directory
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const PORT = process.env.PORT || 8008;
+
+// Auto-detect the primary local network IP (changes when Wi-Fi network changes)
+function getLocalIP() {
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const iface of ifaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
 
 // Reads the live Cloudflare tunnel URL from tunnel.log (written by cloudflared).
-// Falls back to BASE_URL from .env if no tunnel is running.
+// Falls back to dynamically detected local IP so no hardcoded IPs are needed.
 const TUNNEL_LOG = path.join(__dirname, '..', 'tunnel.log');
 function getBaseUrl() {
   try {
@@ -100,8 +115,11 @@ function getBaseUrl() {
     const matches = log.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/g);
     if (matches) return matches[matches.length - 1]; // last = most recent tunnel URL
   } catch (_) {}
-  return BASE_URL;
+  return `http://${getLocalIP()}:${PORT}`;
 }
+
+// Keep BASE_URL as a computed value for any legacy references
+const BASE_URL = getBaseUrl();
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const SYNAPSE_ADMIN_TOKEN = process.env.SYNAPSE_ADMIN_TOKEN;
 const SYNAPSE_SERVER_NAME = process.env.SYNAPSE_SERVER_NAME || 'localhost';
@@ -138,10 +156,18 @@ app.get('/health', async (req, res) => {
 });
 
 // ===== CALL SERVER CONFIG ENDPOINT =====
-// Returns the correct call server URL (tunnel URL if available) so clients can connect correctly
+// Returns the correct call server URL dynamically — no hardcoded IPs.
+// Uses the incoming request's host so it works on any network/IP/tunnel.
 app.get('/call-config.json', (req, res) => {
+  const proto = req.get('x-forwarded-proto') || 'http';
+  const localIP = getLocalIP();
+  const callServerUrl = `${proto}://${localIP}:${PORT}`;
+  const homeserverUrl = `${proto}://${localIP}:8008`;
+
   res.json({
-    baseUrl: getBaseUrl(),
+    baseUrl: callServerUrl,
+    websocketUrl: callServerUrl,
+    homeserverUrl: homeserverUrl,
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
@@ -151,17 +177,21 @@ app.get('/call-config.json', (req, res) => {
 });
 
 // ===== .WELL-KNOWN ENDPOINTS (for Matrix client/server discovery) =====
+// Uses the request's own host header so it works regardless of IP or tunnel URL
 app.get('/.well-known/matrix/client', (req, res) => {
+  const proto = req.get('x-forwarded-proto') || 'http';
+  const host = req.get('host') || `${getLocalIP()}:${PORT}`;
   res.json({
     'm.homeserver': {
-      'base_url': BASE_URL,
+      'base_url': `${proto}://${host}`,
     },
   });
 });
 
 app.get('/.well-known/matrix/server', (req, res) => {
+  const host = req.get('host') || `${getLocalIP()}:${PORT}`;
   res.json({
-    'm.server': `${BASE_URL.replace('https://', '').replace('http://', '')}`,
+    'm.server': host,
   });
 });
 

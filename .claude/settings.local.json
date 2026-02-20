@@ -59,7 +59,9 @@
       "Bash(do grep -l \"importantContentBloc\\\\|initMatrix\\\\|onLogin\" \"$f\")",
       "WebFetch(domain:pub.dev)",
       "WebFetch(domain:element.io)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(head:*)",
+      "Bash(docker network:*)"
     ]
   }
 }

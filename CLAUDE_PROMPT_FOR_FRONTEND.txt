@@ -1,0 +1,71 @@
+Fix the WebSocket connection loop in FluffyChat by updating how we fetch call-config.json.
+
+## CONTEXT: Backend Architecture
+
+Our system has TWO separate servers:
+1. **Call Backend (port 3000)**: Node.js server handling WebRTC calls, WebSocket signaling, and call APIs
+2. **Matrix Homeserver (port 8008)**: Synapse server handling Matrix protocol (auth, rooms, messages)
+
+We use a custom WebRTC implementation (not Matrix's built-in VoIP) for better control over call features.
+
+## THE PROBLEM
+
+FluffyChat is fetching call-config.json from the WRONG port:
+- Currently fetching from: `http://192.168.1.22:8008/call-config.json` (Synapse - doesn't exist)
+- Should fetch from: `http://192.168.1.22:3000/call-config.json` (Call Backend - exists)
+
+This causes a 404 error, callConfig becomes null, and WebSocket enters a connection loop.
+
+## BACKEND ENDPOINT RESPONSE
+
+`GET http://192.168.1.22:3000/call-config.json` returns:
+```json
+{
+  "baseUrl": "http://192.168.1.22:3000",
+  "websocketUrl": "http://192.168.1.22:3000",
+  "homeserverUrl": "http://192.168.1.22:8008",
+  "iceServers": [
+    { "urls": "stun:stun.l.google.com:19302" },
+    { "urls": "stun:stun1.l.google.com:19302" },
+    { "urls": "stun:stun2.l.google.com:19302" }
+  ]
+}
+```
+
+## REQUIRED FIX
+
+In `lib/widgets/matrix.dart`, update the `_fetchCallConfig()` method (around line 115):
+
+**CHANGE FROM:**
+```dart
+final configUrl = Uri.parse('${client.homeserver}/call-config.json');
+```
+
+**CHANGE TO:**
+```dart
+// Extract IP/host from homeserver URL and use port 3000 for call backend
+final homeserverUri = client.homeserver;
+final callBackendUrl = Uri.parse(
+  '${homeserverUri?.scheme ?? 'http'}://${homeserverUri?.host ?? 'localhost'}:3000/call-config.json'
+);
+final response = await http.get(callBackendUrl);
+```
+
+## WHY THIS FIX WORKS
+
+- Port 8008 (Synapse) only serves Matrix protocol endpoints (`/_matrix/*`)
+- Port 3000 (Call Backend) serves call-config.json with WebSocket URL and ICE servers
+- The config tells FluffyChat to connect WebSocket to port 3000 for call signaling
+- This separates Matrix protocol (8008) from call functionality (3000)
+
+## VERIFICATION
+
+After the fix:
+1. FluffyChat should successfully fetch call-config.json on startup
+2. WebSocket should connect to `ws://192.168.1.22:3000`
+3. No more connection loop in logs
+4. Check logs for: `[CallSocketService] Connected successfully`
+
+## TASK
+
+Please locate the `_fetchCallConfig()` method in `lib/widgets/matrix.dart` and update it to fetch from port 3000 instead of using the homeserver URL directly. Make sure to handle the URL parsing correctly to extract the host and replace the port.

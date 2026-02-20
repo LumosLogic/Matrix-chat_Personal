@@ -1,9 +1,9 @@
 version: "3.9"
 
 services:
-  postgres:
+  synapse-db:
     image: postgres:15
-    container_name: matrix-postgres
+    container_name: synapse-postgres
     environment:
       POSTGRES_DB: synapse_db
       POSTGRES_USER: synapse_user
@@ -12,7 +12,7 @@ services:
       TZ: "Asia/Kolkata"
     command: postgres -c timezone=Asia/Kolkata
     volumes:
-      - ./postgres-data:/var/lib/postgresql/data
+      - ./synapse-db:/var/lib/postgresql/data
       - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     ports:
       - "5432:5432"
@@ -27,7 +27,7 @@ services:
     image: matrixdotorg/synapse:latest
     container_name: synapse
     depends_on:
-      postgres:
+      synapse-db:
         condition: service_healthy
     volumes:
       - ./data:/data
