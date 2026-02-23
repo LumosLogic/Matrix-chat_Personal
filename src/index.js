@@ -18,6 +18,7 @@ const { router: callRoutes, setIoInstance } = require('./call-routes');
 const { router: statusRoutes, cleanupExpiredStatuses } = require('./status-routes');
 const { sendBeaconInfoStop } = require('./location-helpers');
 const { setupCallSignaling } = require('./call-signaling');
+const { purgeExpiredMessages, ensureTable: ensureDisappearingTable } = require('./disappearing-messages');
 
 const app = express();
 const server = http.createServer(app);
@@ -282,6 +283,8 @@ app.use('/api/fluffychat/location', fluffychatLocationRoutes);
 // Voice/Video call API routes
 app.use('/api/calls', callRoutes);
 app.use('/api/status', statusRoutes);
+const keyBackupRoutes = require('./key-backup-routes');
+app.use('/api/keys', keyBackupRoutes);
 
 // Setup WebSocket signaling for WebRTC
 setupCallSignaling(io);
@@ -647,59 +650,14 @@ server.listen(PORT, () => {
   cleanupExpiredStatuses();
   setInterval(cleanupExpiredStatuses, 60 * 60 * 1000);
 
-  // Disappearing messages cleanup - purge expired messages from Synapse
-  async function purgeExpiredMessages() {
-    try {
-      // Query Synapse DB for rooms with m.room.retention state events
-      const result = await synapsePool.query(
-        `SELECT c.room_id, e.json::jsonb->'content' AS content
-         FROM current_state_events c
-         JOIN event_json e ON c.event_id = e.event_id
-         WHERE c.type = 'm.room.retention'`
-      );
-
-      for (const row of result.rows) {
-        try {
-          const content = typeof row.content === 'string' ? JSON.parse(row.content) : row.content;
-          const maxLifetime = content?.max_lifetime;
-
-          if (!maxLifetime || maxLifetime <= 0) {
-            continue;
-          }
-
-          const cutoffTimestamp = Date.now() - maxLifetime;
-
-          console.log(`[RETENTION] Purging room ${row.room_id} (max_lifetime: ${maxLifetime}ms, cutoff: ${new Date(cutoffTimestamp).toISOString()})`);
-
-          const purgeResponse = await axios.post(
-            `${SYNAPSE_URL}/_synapse/admin/v1/purge_history/${encodeURIComponent(row.room_id)}`,
-            { purge_up_to_ts: cutoffTimestamp },
-            {
-              headers: {
-                'Authorization': `Bearer ${SYNAPSE_ADMIN_TOKEN}`,
-                'Content-Type': 'application/json',
-              },
-            }
-          );
-
-          console.log(`[RETENTION] Purge started for ${row.room_id}, purge_id: ${purgeResponse.data.purge_id}`);
-        } catch (err) {
-          console.error(`[RETENTION] Failed to purge room ${row.room_id}:`, err.response?.data || err.message);
-        }
-      }
-
-      if (result.rows.length > 0) {
-        console.log(`[RETENTION] Processed ${result.rows.length} room(s) with retention policies`);
-      }
-    } catch (error) {
-      console.error('[RETENTION] Purge timer error:', error.message);
-    }
-  }
-
-  // Run retention purge on startup and then every 1 minute
-  // (frequent interval needed to support 5-minute disappearing messages)
-  purgeExpiredMessages();
-  setInterval(purgeExpiredMessages, 1 * 60 * 1000);
+  // Disappearing messages – secure monotonic purge (see src/disappearing-messages.js)
+  // Ensures messages cannot be recovered by relaxing or disabling the policy.
+  ensureDisappearingTable()
+    .then(() => {
+      purgeExpiredMessages();
+      setInterval(purgeExpiredMessages, 60 * 1000);
+    })
+    .catch((err) => console.error('[DISAPPEAR] Failed to initialise tracking table:', err.message));
 
   // Handle graceful shutdown
   process.on('SIGINT', () => {
