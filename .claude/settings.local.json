@@ -61,7 +61,8 @@
       "WebFetch(domain:element.io)",
       "mcp__ide__getDiagnostics",
       "Bash(head:*)",
-      "Bash(docker network:*)"
+      "Bash(docker network:*)",
+      "Bash(lsof:*)"
     ]
   }
 }

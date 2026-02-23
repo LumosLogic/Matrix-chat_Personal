@@ -15,6 +15,7 @@ const synapsePool = require('./synapse-db');
 const locationRoutes = require('./location-routes');
 const fluffychatLocationRoutes = require('./fluffychat-location');
 const { router: callRoutes, setIoInstance } = require('./call-routes');
+const { router: statusRoutes, cleanupExpiredStatuses } = require('./status-routes');
 const { sendBeaconInfoStop } = require('./location-helpers');
 const { setupCallSignaling } = require('./call-signaling');
 
@@ -280,6 +281,7 @@ app.use('/api/fluffychat/location', fluffychatLocationRoutes);
 
 // Voice/Video call API routes
 app.use('/api/calls', callRoutes);
+app.use('/api/status', statusRoutes);
 
 // Setup WebSocket signaling for WebRTC
 setupCallSignaling(io);
@@ -640,6 +642,10 @@ server.listen(PORT, () => {
   // Run expiry check on startup and then every 60 seconds
   expireLocationSessions();
   setInterval(expireLocationSessions, 60 * 1000);
+
+  // Status cleanup — remove expired items (and optionally purge MXC media) every hour
+  cleanupExpiredStatuses();
+  setInterval(cleanupExpiredStatuses, 60 * 60 * 1000);
 
   // Disappearing messages cleanup - purge expired messages from Synapse
   async function purgeExpiredMessages() {
