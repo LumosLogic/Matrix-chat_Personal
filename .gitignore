@@ -17,3 +17,6 @@ synapse-db/
 # Media files
 data/media_store/
 synapse-db/
+/.blackbox/pubring.gpg~
+/.blackbox/pubring.kbx~
+/.blackbox/secring.gpg
