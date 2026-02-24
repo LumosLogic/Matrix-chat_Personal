@@ -35,6 +35,8 @@ function setupCallSignaling(io) {
       }
       userSockets.get(userId).add(socket.id);
       console.log(`[CALL] User ${userId} registered on device ${socket.id} (${userSockets.get(userId).size} device(s))`);
+      console.log(`[CALL] Total registered users: ${userSockets.size}, Users: ${Array.from(userSockets.keys()).join(', ')}`);
+      console.log(`[CALL] Current userSockets map:`, Array.from(userSockets.entries()).map(([k, v]) => `${k}: ${Array.from(v).join(', ')}`).join('; '));
 
       // Deliver any pending incoming-call notifications stored while user was offline
       const pending = pendingCallNotifications.get(userId);
@@ -69,6 +71,10 @@ function setupCallSignaling(io) {
       }
       callParticipants.get(callId).add(userId);
 
+      console.log(`[CALL] ${userId} joined call room ${callId}`);
+      console.log(`[CALL] Call ${callId} now has participants:`, Array.from(callParticipants.get(callId)).join(', '));
+      console.log(`[CALL] Socket ${socket.id} is in rooms:`, Array.from(socket.rooms));
+
       try {
         await pool.query(
           `INSERT INTO call_events (call_id, matrix_user_id, event_type) VALUES ($1, $2, 'socket_connected')`,
@@ -91,17 +97,22 @@ function setupCallSignaling(io) {
 
     // Helper: send to a specific user or broadcast to all call participants (excluding sender)
     function sendToTarget(eventName, callId, senderId, targetUserId, payload) {
+      console.log(`[CALL] sendToTarget: event=${eventName}, callId=${callId}, senderId=${senderId}, targetUserId=${targetUserId || 'all'}`);
+      
       if (targetUserId && targetUserId !== 'all') {
         // Send to specific user
         const targetSockets = userSockets.get(targetUserId);
+        console.log(`[CALL] Target user ${targetUserId} has sockets:`, targetSockets ? Array.from(targetSockets).join(', ') : 'NONE');
         if (targetSockets) {
           targetSockets.forEach(targetSocketId => {
             io.to(targetSocketId).emit(eventName, { ...payload, fromUserId: senderId });
+            console.log(`[CALL] Sent ${eventName} to specific socket ${targetSocketId}`);
           });
         }
       } else {
         // Broadcast to all participants in the call except sender
         const participants = callParticipants.get(callId);
+        console.log(`[CALL] Call ${callId} participants:`, participants ? Array.from(participants).join(', ') : 'NONE');
         if (participants) {
           participants.forEach(participantId => {
             if (participantId !== senderId) {
@@ -109,6 +120,7 @@ function setupCallSignaling(io) {
               if (sockets) {
                 sockets.forEach(socketId => {
                   io.to(socketId).emit(eventName, { ...payload, fromUserId: senderId });
+                  console.log(`[CALL] Broadcast ${eventName} to ${participantId} via socket ${socketId}`);
                 });
               }
             }
@@ -118,6 +130,7 @@ function setupCallSignaling(io) {
     }
 
     socket.on('webrtc-offer', async ({ callId, offer, targetUserId }) => {
+      console.log(`[CALL] webrtc-offer received from ${socket.userId} in call ${callId}, target: ${targetUserId || 'all'}`);
       try {
         await pool.query(
           `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata) VALUES ($1, $2, 'offer_sent', $3)`,
@@ -132,6 +145,7 @@ function setupCallSignaling(io) {
     });
 
     socket.on('webrtc-answer', async ({ callId, answer, targetUserId }) => {
+      console.log(`[CALL] webrtc-answer received from ${socket.userId} in call ${callId}, target: ${targetUserId || 'all'}`);
       try {
         await pool.query(
           `INSERT INTO call_events (call_id, matrix_user_id, event_type, metadata) VALUES ($1, $2, 'answer_sent', $3)`,
@@ -146,6 +160,7 @@ function setupCallSignaling(io) {
     });
 
     socket.on('ice-candidate', ({ callId, candidate, targetUserId }) => {
+      console.log(`[CALL] ice-candidate from ${socket.userId} in call ${callId}, target: ${targetUserId || 'all'}`);
       sendToTarget('ice-candidate', callId, socket.userId, targetUserId, { candidate, targetUserId });
     });
 
@@ -175,6 +190,7 @@ function setupCallSignaling(io) {
 
     socket.on('leave-call', async ({ callId }) => {
       if (socket.userId && callId) {
+        console.log(`[CALL] User ${socket.userId} leaving call ${callId}`);
         try {
           await pool.query(
             `UPDATE call_participants SET status = 'left', left_at = NOW() WHERE call_id = $1 AND matrix_user_id = $2`,
@@ -306,6 +322,7 @@ async function notifyIncomingCall(io, callData) {
     callId,
     callType,
     roomId,
+    initiatorId,
     callerName: callerDisplayName || initiatorId,
     callerId: initiatorId,
     iceServers: ICE_SERVERS
@@ -356,6 +373,7 @@ async function notifyIncomingCall(io, callData) {
     const sockets = userSockets.get(recipientId);
     if (sockets && sockets.size > 0) {
       sockets.forEach(socketId => {
+        console.log(`[CALL] Emitting incoming-call to ${recipientId} (socket ${socketId}):`, JSON.stringify(callEvent));
         io.to(socketId).emit('incoming-call', callEvent);
         notifiedCount++;
         console.log(`[CALL] Notified ${recipientId} on device ${socketId} of incoming call ${callId} from ${initiatorId}`);

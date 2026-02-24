@@ -125,6 +125,7 @@ const BASE_URL = getBaseUrl();
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const SYNAPSE_ADMIN_TOKEN = process.env.SYNAPSE_ADMIN_TOKEN;
 const SYNAPSE_SERVER_NAME = process.env.SYNAPSE_SERVER_NAME || 'localhost';
+const BOT_USER_ID = process.env.BOT_USER_ID || '@invitebot:localhost';
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 
 // Middleware: Admin authentication
@@ -197,9 +198,39 @@ app.get('/.well-known/matrix/server', (req, res) => {
   });
 });
 
+/**
+ * Send a Matrix message to a room as the invite bot using Synapse admin
+ * user impersonation. Called after successful registration to notify the admin.
+ */
+async function _notifyRoomOfRegistration(roomId, matrixUserId, email, fullName) {
+  try {
+    // Step 1: Get a temporary access token for the invite bot via admin API
+    const loginResp = await axios.post(
+      `${SYNAPSE_URL}/_synapse/admin/v1/users/${encodeURIComponent(BOT_USER_ID)}/login`,
+      {},
+      { headers: { Authorization: `Bearer ${SYNAPSE_ADMIN_TOKEN}` } }
+    );
+    const botToken = loginResp.data.access_token;
+
+    // Step 2: Send message to the room as the bot
+    const txnId = `reg_${Date.now()}`;
+    await axios.put(
+      `${SYNAPSE_URL}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
+      {
+        msgtype: 'm.text',
+        body: `New user registered!\n\nName: ${fullName}\nEmail: ${email}\nMatrix ID: ${matrixUserId}\n\nThey can now log in using the FluffyChat app.`,
+      },
+      { headers: { Authorization: `Bearer ${botToken}` } }
+    );
+    console.log(`[NOTIFY] Registration notification sent to ${roomId} for ${matrixUserId}`);
+  } catch (e) {
+    console.error('[NOTIFY] Error sending notification:', e.response?.data || e.message);
+  }
+}
+
 // POST /invites - Create a new registration invite (ADMIN ONLY)
 app.post('/invites', requireAdmin, async (req, res) => {
-  const { email } = req.body;
+  const { email, room_id } = req.body;
 
   if (!email) {
     return res.status(400).json({
@@ -226,10 +257,10 @@ app.post('/invites', requireAdmin, async (req, res) => {
 
     const result = await client.query(
       `INSERT INTO registration_invites
-       (id, email, token, invited_by, expires_at, used, created_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, false, NOW())
+       (id, email, token, invited_by, expires_at, used, created_at, room_id)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, false, NOW(), $5)
        RETURNING id, email, token, expires_at, created_at`,
-      [email, token, invitedBy, expiresAt]
+      [email, token, invitedBy, expiresAt, room_id || null]
     );
 
     const invite = result.rows[0];
@@ -392,7 +423,7 @@ app.post('/register', async (req, res) => {
 
     // Validate invite token - fetch full record for specific error messages
     const inviteResult = await client.query(
-      `SELECT id, email, invited_by, expires_at, used
+      `SELECT id, email, invited_by, expires_at, used, room_id
        FROM registration_invites
        WHERE token = $1
        FOR UPDATE`,
@@ -500,6 +531,7 @@ app.post('/register', async (req, res) => {
       [invite.id]
     );
 
+
     // Insert audit log: INVITE_USED
     await client.query(
       `INSERT INTO audit_logs (id, action, actor, target, created_at)
@@ -515,6 +547,13 @@ app.post('/register', async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    // Send chat notification to the room where !invite was typed (fire-and-forget)
+    if (invite.room_id) {
+      _notifyRoomOfRegistration(invite.room_id, matrixUserId, invite.email, full_name).catch(e => {
+        console.error('[NOTIFY] Failed to send registration notification:', e.message);
+      });
+    }
 
     res.status(201).json({
       success: true,

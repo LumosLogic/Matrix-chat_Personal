@@ -1,6 +1,8 @@
 # Configuration file for Synapse.
 
-server_name: "localhost"
+server_name: "54.197.248.7"
+
+public_baseurl: "http://54.197.248.7:8008"
 
 # --- ENTERPRISE REGISTRATION SETTINGS ---
 enable_registration: true
@@ -61,8 +63,8 @@ signing_key_path: "/data/localhost.signing.key"
 trusted_key_servers:
   - server_name: "matrix.org"
 
-# --- E2EE ENABLED (auto-bootstrap handles key management seamlessly) ---
-encryption_enabled_by_default_for_room_type: "all"
+# --- E2EE DISABLED (bots require unencrypted rooms) ---
+encryption_enabled_by_default_for_room_type: "off"
 # ---------------------------------
 
 # --- LOCATION SHARING SUPPORT (MSC3488 & MSC3672) ---

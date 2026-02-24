@@ -86,10 +86,10 @@ async function isAuthorizedAdmin(userId) {
 /**
  * Call backend API to generate invite
  */
-async function generateInvite(email) {
+async function generateInvite(email, roomId) {
   const response = await axios.post(
     `${CONFIG.backendUrl}/invites`,
-    { email },
+    { email, room_id: roomId },
     {
       headers: {
         'Content-Type': 'application/json',
@@ -193,7 +193,7 @@ async function handleInviteCommand(client, roomId, senderId, email) {
   // Generate invite via backend
   try {
     console.log(`[API] Calling backend to generate invite for ${email}...`);
-    const result = await generateInvite(email);
+    const result = await generateInvite(email, roomId);
     console.log(`[API] Invite created: ${result.invite.id}`);
     await sendMessage(client, roomId, formatSuccessMessage(email, result));
   } catch (error) {

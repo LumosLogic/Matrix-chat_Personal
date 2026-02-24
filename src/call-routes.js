@@ -148,6 +148,8 @@ router.post('/:callId/answer', async (req, res) => {
   const { callId } = req.params;
   const { userId, accessToken } = req.body;
 
+  console.log(`[CALL] Answer request: callId=${callId}, userId=${userId}`);
+
   if (!userId || !accessToken) {
     return res.status(400).json({ error: 'userId and accessToken required' });
   }
@@ -157,16 +159,19 @@ router.post('/:callId/answer', async (req, res) => {
     await client.query('BEGIN');
 
     const result = await client.query(
-      `SELECT room_id, status, initiator_id FROM call_sessions WHERE call_id = $1`,
+      `SELECT room_id, status, initiator_id, call_type FROM call_sessions WHERE call_id = $1::text`,
       [callId]
     );
 
     if (result.rows.length === 0) {
+      console.log(`[CALL] Answer failed: Call ${callId} not found in database`);
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Call not found' });
     }
 
-    const { room_id, status, initiator_id } = result.rows[0];
+    console.log(`[CALL] Found call ${callId}: status=${result.rows[0].status}, initiator=${result.rows[0].initiator_id}`);
+
+    const { room_id, status, initiator_id, call_type } = result.rows[0];
 
     if (status !== 'ringing') {
       await client.query('ROLLBACK');
@@ -174,27 +179,28 @@ router.post('/:callId/answer', async (req, res) => {
     }
 
     await client.query(
-      `UPDATE call_sessions SET status = 'active', started_at = NOW() WHERE call_id = $1`,
+      `UPDATE call_sessions SET status = 'active', started_at = NOW() WHERE call_id = $1::text`,
       [callId]
     );
 
     // Upsert participant: update to 'joined' if already 'invited', otherwise insert fresh
-    await client.query(
+    const updateResult = await client.query(
       `UPDATE call_participants SET status = 'joined', joined_at = NOW()
-       WHERE call_id = $1 AND matrix_user_id = $2`,
+       WHERE call_id = $1::text AND matrix_user_id = $2`,
       [callId, userId]
     );
-    await client.query(
-      `INSERT INTO call_participants (call_id, matrix_user_id, status, joined_at)
-       SELECT $1, $2, 'joined', NOW()
-       WHERE NOT EXISTS (
-         SELECT 1 FROM call_participants WHERE call_id = $1 AND matrix_user_id = $2
-       )`,
-      [callId, userId]
-    );
+    
+    // If no row was updated, insert new participant
+    if (updateResult.rowCount === 0) {
+      await client.query(
+        `INSERT INTO call_participants (call_id, matrix_user_id, status, joined_at)
+         VALUES ($1::text, $2, 'joined', NOW())`,
+        [callId, userId]
+      );
+    }
 
     await client.query(
-      `INSERT INTO call_events (call_id, matrix_user_id, event_type) VALUES ($1, $2, 'call_answered')`,
+      `INSERT INTO call_events (call_id, matrix_user_id, event_type) VALUES ($1::text, $2, 'call_answered')`,
       [callId, userId]
     );
 
@@ -214,12 +220,12 @@ router.post('/:callId/answer', async (req, res) => {
       const initiatorSockets = userSockets.get(initiator_id);
       if (initiatorSockets) {
         initiatorSockets.forEach(socketId => {
-          ioInstance.to(socketId).emit('call-answered', { callId, answeredBy: userId });
+          ioInstance.to(socketId).emit('call-answered', { callId, answeredBy: userId, roomId: room_id, callType: call_type });
         });
       }
     }
 
-    res.json({ callId, status: 'active', iceServers: ICE_SERVERS });
+    res.json({ callId, status: 'active', roomId: room_id, callType: call_type, iceServers: ICE_SERVERS });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('[CALL] Answer error:', error);
