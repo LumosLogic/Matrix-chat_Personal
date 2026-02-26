@@ -163,9 +163,12 @@ app.get('/health', async (req, res) => {
 // Uses the incoming request's host so it works on any network/IP/tunnel.
 app.get('/call-config.json', (req, res) => {
   const proto = req.get('x-forwarded-proto') || 'http';
-  const localIP = getLocalIP();
-  const callServerUrl = `${proto}://${localIP}:${PORT}`;
-  const homeserverUrl = `${proto}://${localIP}:8008`;
+  // Use the public host from the incoming request so this works behind any
+  // IP, domain, or Cloudflare tunnel without hardcoding. Falls back to the
+  // local IP only if the Host header is missing (never happens in practice).
+  const host = req.get('host')?.split(':')[0] || getLocalIP();
+  const callServerUrl = `${proto}://${host}:${PORT}`;
+  const homeserverUrl = `${proto}://${host}:8008`;
 
   res.json({
     baseUrl: callServerUrl,
