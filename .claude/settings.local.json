@@ -68,7 +68,9 @@
       "Bash(flutter pub cache:*)",
       "Bash(dart pub cache:*)",
       "Bash(/Users/priyanshupatel/flutter/bin/dart pub cache:*)",
-      "Bash(/Users/priyanshupatel/fvm/versions/stable/bin/dart pub cache:*)"
+      "Bash(/Users/priyanshupatel/fvm/versions/stable/bin/dart pub cache:*)",
+      "Bash(pm2 save:*)",
+      "Bash(ls:*)"
     ]
   }
 }

@@ -25,25 +25,8 @@ module.exports = {
       max_restarts: 50,
       min_uptime: 5000,
     },
-    {
-      name: 'invite-bot',
-      script: 'index.js',
-      cwd: path.join(ROOT, 'matrix-invite-bot'),
-      autorestart: true,
-      restart_delay: 5000,
-      max_restarts: 50,
-      min_uptime: 5000,
-      wait_ready: false,
-    },
-    {
-      name: 'ai-bot',
-      script: 'index.js',
-      cwd: path.join(ROOT, 'matrix-ai-bot'),
-      autorestart: true,
-      restart_delay: 5000,
-      max_restarts: 50,
-      min_uptime: 5000,
-      wait_ready: false,
-    },
+    // invite-bot and ai-bot disabled — start manually when needed:
+    // pm2 start ecosystem.config.js --only invite-bot
+    // pm2 start ecosystem.config.js --only ai-bot
   ],
 };

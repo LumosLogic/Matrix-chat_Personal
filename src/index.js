@@ -2,7 +2,6 @@ require('dotenv').config();
 
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
 const crypto = require('crypto');
 const axios = require('axios');
 const path = require('path');
@@ -14,20 +13,12 @@ const pool = require('./db');
 const synapsePool = require('./synapse-db');
 const locationRoutes = require('./location-routes');
 const fluffychatLocationRoutes = require('./fluffychat-location');
-const { router: callRoutes, setIoInstance } = require('./call-routes');
 const { router: statusRoutes, cleanupExpiredStatuses } = require('./status-routes');
 const { sendBeaconInfoStop } = require('./location-helpers');
-const { setupCallSignaling } = require('./call-signaling');
 const { purgeExpiredMessages, ensureTable: ensureDisappearingTable } = require('./disappearing-messages');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  }
-});
 
 const SYNAPSE_URL_FOR_PROXY = process.env.SYNAPSE_URL || 'http://localhost:8008';
 
@@ -38,8 +29,11 @@ app.use('/_matrix', createProxyMiddleware({
   target: SYNAPSE_URL_FOR_PROXY,
   changeOrigin: true,
   ws: true,
-  timeout: 30000,
-  proxyTimeout: 30000,
+  // Matrix sync uses ?timeout=30000 (30s long-poll). Proxy timeout must be
+  // higher than that to avoid a race condition where the proxy cuts off a
+  // still-running sync request and returns a 502 to the client.
+  timeout: 60000,
+  proxyTimeout: 60000,
   pathRewrite: { '^/': '/_matrix/' }, // Express strips /_matrix prefix — restore it
   onError: (err, req, res) => {
     console.error('[PROXY] Matrix API proxy error:', err.message);
@@ -122,6 +116,34 @@ function getBaseUrl() {
 
 // Keep BASE_URL as a computed value for any legacy references
 const BASE_URL = getBaseUrl();
+
+// ===== DYNAMIC public_baseurl SYNC =====
+// homeserver.yaml's public_baseurl must match whatever URL clients use to reach
+// this server. Since the IP changes whenever the machine switches Wi-Fi networks
+// (and the Cloudflare tunnel URL changes on every restart), we rewrite the field
+// automatically every time Node.js starts — so the NEXT Synapse restart always
+// picks up the correct value without any manual edits.
+function syncPublicBaseUrl() {
+  const baseUrl = getBaseUrl().replace(/\/$/, ''); // strip any trailing slash
+  const yamlPath = path.join(__dirname, '..', 'data', 'homeserver.yaml');
+  try {
+    const content = fs.readFileSync(yamlPath, 'utf8');
+    const updated = content.replace(
+      /^public_baseurl:.*$/m,
+      `public_baseurl: "${baseUrl}/"`,
+    );
+    if (updated !== content) {
+      fs.writeFileSync(yamlPath, updated);
+      console.log(`[Config] homeserver.yaml public_baseurl updated → ${baseUrl}/`);
+    } else {
+      console.log(`[Config] homeserver.yaml public_baseurl already up to date: ${baseUrl}/`);
+    }
+  } catch (e) {
+    console.error('[Config] Failed to sync public_baseurl:', e.message);
+  }
+}
+syncPublicBaseUrl();
+// ========================================
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const SYNAPSE_ADMIN_TOKEN = process.env.SYNAPSE_ADMIN_TOKEN;
 const SYNAPSE_SERVER_NAME = process.env.SYNAPSE_SERVER_NAME || 'localhost';
@@ -158,44 +180,26 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// ===== CALL SERVER CONFIG ENDPOINT =====
-// Returns the correct call server URL dynamically — no hardcoded IPs.
-// Uses the incoming request's host so it works on any network/IP/tunnel.
-app.get('/call-config.json', (req, res) => {
-  const proto = req.get('x-forwarded-proto') || 'http';
-  // Use the public host from the incoming request so this works behind any
-  // IP, domain, or Cloudflare tunnel without hardcoding. Falls back to the
-  // local IP only if the Host header is missing (never happens in practice).
-  const host = req.get('host')?.split(':')[0] || getLocalIP();
-  const callServerUrl = `${proto}://${host}:${PORT}`;
-  const homeserverUrl = `${proto}://${host}:8008`;
-
-  res.json({
-    baseUrl: callServerUrl,
-    websocketUrl: callServerUrl,
-    homeserverUrl: homeserverUrl,
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' }
-    ]
-  });
-});
-
 // ===== .WELL-KNOWN ENDPOINTS (for Matrix client/server discovery) =====
-// CRITICAL: Must return Synapse homeserver URL (port 8008), NOT backend port (3000)
+// Returns URLs dynamically based on the incoming request host so this works
+// correctly on any IP (192.168.1.7, cqr-server.local, Cloudflare tunnel, etc.)
+// without hardcoding addresses.
 app.get('/.well-known/matrix/client', (req, res) => {
+  const proto = req.get('x-forwarded-proto') || 'http';
+  // Use the full host header (includes port) so clients reach us on the right port.
+  const host = req.get('host') || `${getLocalIP()}:${PORT}`;
   res.json({
     'm.homeserver': {
-      'base_url': SYNAPSE_URL,  // http://54.197.248.7:8008
+      'base_url': `${proto}://${host}`,
     },
   });
 });
 
 app.get('/.well-known/matrix/server', (req, res) => {
-  const serverName = SYNAPSE_SERVER_NAME || '54.197.248.7';
+  const proto = req.get('x-forwarded-proto') || 'http';
+  const host = req.get('host') || `${getLocalIP()}:${PORT}`;
   res.json({
-    'm.server': `${serverName}:8008`,
+    'm.server': host,
   });
 });
 
@@ -312,17 +316,9 @@ app.use('/api/location', locationRoutes);
 // FluffyChat direct location API (bypasses web UI)
 app.use('/api/fluffychat/location', fluffychatLocationRoutes);
 
-// Voice/Video call API routes
-app.use('/api/calls', callRoutes);
 app.use('/api/status', statusRoutes);
 const keyBackupRoutes = require('./key-backup-routes');
 app.use('/api/keys', keyBackupRoutes);
-
-// Setup WebSocket signaling for WebRTC
-setupCallSignaling(io);
-
-// Connect WebSocket instance to call routes
-setIoInstance(io);
 
 // GET /api/validate-token - Validate invite token before showing form
 app.get('/api/validate-token', async (req, res) => {
@@ -638,7 +634,7 @@ app.use((req, res) => {
 server.listen(PORT, () => {
   console.log(`Matrix Enterprise Backend running on port ${PORT}`);
   console.log(`Health check: ${BASE_URL}/health`);
-  console.log(`WebSocket server ready for call signaling`);
+  console.log(`Matrix VoIP enabled (signaling via Synapse sync)`);
 
   // NOTE: Bots now run as separate PM2 processes instead of child_process.fork()
   // Start them with: pm2 start ecosystem.config.js
