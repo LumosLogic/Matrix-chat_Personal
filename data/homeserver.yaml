@@ -2,10 +2,9 @@
 
 server_name: "54.197.248.7"
 
-# AUTO-MANAGED: rewritten at every Node.js startup by syncPublicBaseUrl() in
-# src/index.js — uses the live Cloudflare tunnel URL or the current local IP.
-# Do NOT hardcode this manually; it will be overwritten on the next server start.
-public_baseurl: "https://browsers-her-searches-decided.trycloudflare.com/"
+# Set this to your local IP or Cloudflare tunnel URL
+# Change manually as needed when your IP changes
+public_baseurl: "http://192.168.1.11:3000/"
 
 # --- ENTERPRISE REGISTRATION SETTINGS ---
 enable_registration: true

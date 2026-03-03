@@ -117,33 +117,7 @@ function getBaseUrl() {
 // Keep BASE_URL as a computed value for any legacy references
 const BASE_URL = getBaseUrl();
 
-// ===== DYNAMIC public_baseurl SYNC =====
-// homeserver.yaml's public_baseurl must match whatever URL clients use to reach
-// this server. Since the IP changes whenever the machine switches Wi-Fi networks
-// (and the Cloudflare tunnel URL changes on every restart), we rewrite the field
-// automatically every time Node.js starts — so the NEXT Synapse restart always
-// picks up the correct value without any manual edits.
-function syncPublicBaseUrl() {
-  const baseUrl = getBaseUrl().replace(/\/$/, ''); // strip any trailing slash
-  const yamlPath = path.join(__dirname, '..', 'data', 'homeserver.yaml');
-  try {
-    const content = fs.readFileSync(yamlPath, 'utf8');
-    const updated = content.replace(
-      /^public_baseurl:.*$/m,
-      `public_baseurl: "${baseUrl}/"`,
-    );
-    if (updated !== content) {
-      fs.writeFileSync(yamlPath, updated);
-      console.log(`[Config] homeserver.yaml public_baseurl updated → ${baseUrl}/`);
-    } else {
-      console.log(`[Config] homeserver.yaml public_baseurl already up to date: ${baseUrl}/`);
-    }
-  } catch (e) {
-    console.error('[Config] Failed to sync public_baseurl:', e.message);
-  }
-}
-syncPublicBaseUrl();
-// ========================================
+
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const SYNAPSE_ADMIN_TOKEN = process.env.SYNAPSE_ADMIN_TOKEN;
 const SYNAPSE_SERVER_NAME = process.env.SYNAPSE_SERVER_NAME || 'localhost';

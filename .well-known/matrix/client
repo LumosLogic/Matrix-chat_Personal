@@ -1,8 +1,5 @@
 {
   "m.homeserver": {
-    "base_url": "https://54.197.248.7:8008"
-  },
-  "m.identity_server": {
-    "base_url": "https://vector.im"
+    "base_url": "http://192.168.1.11:3000"
   }
 }
