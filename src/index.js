@@ -22,6 +22,62 @@ const server = http.createServer(app);
 
 const SYNAPSE_URL_FOR_PROXY = process.env.SYNAPSE_URL || 'http://localhost:8008';
 
+const { sendPushForNewMessage } = require('./push-trigger');
+const { router: pushRoutes, handlePushGateway } = require('./push-routes');
+
+// ===== MATRIX PUSH GATEWAY (must be BEFORE the /_matrix proxy) =====
+// Synapse requires the gateway URL path to be exactly /_matrix/push/v1/notify.
+// We intercept it here before the general /_matrix proxy forwards it to Synapse.
+app.post('/_matrix/push/v1/notify', express.json(), handlePushGateway);
+
+// ===== MATRIX MESSAGE-SEND INTERCEPTOR (must be BEFORE the /_matrix proxy) =====
+// Intercepts PUT /_matrix/client/*/rooms/*/send/* to trigger FCM push after
+// Synapse confirms the event. The request is forwarded to Synapse via axios,
+// the response is returned to the client immediately, then FCM fires async.
+app.put(
+  '/_matrix/client/:version/rooms/:roomId/send/:eventType/:txnId',
+  express.json(),
+  async (req, res) => {
+    const { version, roomId, eventType, txnId } = req.params;
+    try {
+      const synapseRes = await axios({
+        method: 'PUT',
+        url: `${SYNAPSE_URL_FOR_PROXY}/_matrix/client/${version}/rooms/${encodeURIComponent(roomId)}/send/${eventType}/${txnId}`,
+        headers: {
+          authorization: req.headers.authorization,
+          'content-type': 'application/json',
+        },
+        data: req.body,
+        timeout: 30000,
+      });
+
+      // Return Synapse's response to the client immediately
+      res.status(synapseRes.status).json(synapseRes.data);
+
+      // Fire FCM async — never blocks or crashes the message flow
+      const eventId = synapseRes.data?.event_id;
+      if (eventId) {
+        sendPushForNewMessage({
+          roomId,
+          eventId,
+          eventType,
+          messageBody: req.body?.body ?? null,
+          authHeader: req.headers.authorization,
+        }).catch((e) =>
+          console.error('[PUSH-TRIGGER] Unhandled error:', e.message)
+        );
+      }
+    } catch (err) {
+      if (err.response) {
+        res.status(err.response.status).json(err.response.data);
+      } else {
+        console.error('[PUSH-PROXY] Synapse forward error:', err.message);
+        res.status(502).json({ errcode: 'M_UNKNOWN', error: 'Bad Gateway' });
+      }
+    }
+  }
+);
+
 // ===== MATRIX API REVERSE PROXY (must be before express.json() and static) =====
 // Proxy all /_matrix/* and /_synapse/* requests to Synapse homeserver
 // This allows FluffyChat and other Matrix clients to connect via the Cloudflare tunnel
@@ -293,6 +349,8 @@ app.use('/api/fluffychat/location', fluffychatLocationRoutes);
 app.use('/api/status', statusRoutes);
 const keyBackupRoutes = require('./key-backup-routes');
 app.use('/api/keys', keyBackupRoutes);
+
+app.use('/api/push', pushRoutes);
 
 // GET /api/validate-token - Validate invite token before showing form
 app.get('/api/validate-token', async (req, res) => {

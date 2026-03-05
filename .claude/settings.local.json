@@ -70,7 +70,12 @@
       "Bash(/Users/priyanshupatel/flutter/bin/dart pub cache:*)",
       "Bash(/Users/priyanshupatel/fvm/versions/stable/bin/dart pub cache:*)",
       "Bash(pm2 save:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(ssh:*)",
+      "Bash(echo:*)",
+      "Bash(locate:*)",
+      "Bash(env:*)",
+      "Bash(pm2 env:*)"
     ]
   }
 }
