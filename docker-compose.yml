@@ -41,3 +41,12 @@ services:
     ports:
       - "8080:80"
     restart: unless-stopped
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: coturn
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf
+    command: -c /etc/coturn/turnserver.conf

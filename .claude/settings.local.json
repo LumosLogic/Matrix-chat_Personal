@@ -75,7 +75,8 @@
       "Bash(echo:*)",
       "Bash(locate:*)",
       "Bash(env:*)",
-      "Bash(pm2 env:*)"
+      "Bash(pm2 env:*)",
+      "Bash(openssl rand:*)"
     ]
   }
 }

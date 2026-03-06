@@ -4,7 +4,7 @@ server_name: "54.197.248.7"
 
 # Set this to your local IP or Cloudflare tunnel URL
 # Change manually as needed when your IP changes
-public_baseurl: "http://192.168.1.7:3000/"
+public_baseurl: "http://192.168.1.9:3000/"
 
 # --- ENTERPRISE REGISTRATION SETTINGS ---
 enable_registration: true
@@ -67,12 +67,14 @@ trusted_key_servers:
 
 # --- MATRIX NATIVE VOIP ---
 # TURN not configured — calls use STUN (Google) for local/same-network use.
-# For cross-network calls, set up coturn with a real public IP and secret:
+# When you have a server with a public IP, uncomment and fill in:
 # turn_uris:
 #   - "turn:YOUR_PUBLIC_IP:3478?transport=udp"
 #   - "turn:YOUR_PUBLIC_IP:3478?transport=tcp"
-# turn_shared_secret: "YOUR_COTURN_SECRET"
+#   - "turns:YOUR_PUBLIC_IP:5349?transport=tcp"
+# turn_shared_secret: "c098adffdc0a480846769e7d468563971dc7243c67ebea359e45c7a2fccd5497"
 # turn_user_lifetime: 86400000
+# turn_allow_guests: false
 # --------------------------
 
 # --- LOCAL NETWORK WHITELIST ---
