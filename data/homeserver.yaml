@@ -1,10 +1,9 @@
 # Configuration file for Synapse.
 
-server_name: "54.197.248.7"
+server_name: "franco-saucier-lucie.ngrok-free.dev"
 
-# Set this to your local IP or Cloudflare tunnel URL
-# Change manually as needed when your IP changes
-public_baseurl: "http://192.168.1.15:3000/"
+# Set this to your ngrok tunnel URL
+public_baseurl: "https://franco-saucier-lucie.ngrok-free.dev/"
 
 # --- ENTERPRISE REGISTRATION SETTINGS ---
 enable_registration: true
@@ -106,6 +105,12 @@ event_cache_size: 10K
 
 # Enable location message types
 allow_public_rooms_over_federation: true
+
+# --- PUSH NOTIFICATIONS ---
+# Enable push notifications and include message content
+push:
+  include_content: true
+# ---------------------------
 
 # --- TOKEN REFRESH (prevents unexpected logout on server restart) ---
 # Requires Synapse 1.49+. Lets clients refresh tokens instead of full re-login.
