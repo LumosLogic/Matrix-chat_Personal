@@ -77,15 +77,20 @@ trusted_key_servers:
 # --------------------------
 
 # --- LOCAL NETWORK WHITELIST ---
-# Synapse blocks outbound requests to private IPs by default (anti-SSRF).
-# Since this server runs on a local network (192.168.1.x), whitelist the
-# local ranges so federation, media, and push requests are not blocked.
+# Allow Synapse to make outbound HTTPS requests to ngrok
 ip_range_whitelist:
   - '127.0.0.0/8'
   - '::1/128'
   - '192.168.0.0/16'
   - '10.0.0.0/8'
   - '172.16.0.0/12'
+  - '0.0.0.0/0'  # Allow all external IPs for ngrok
+
+# Disable IP blacklists to allow external requests
+url_preview_ip_range_blacklist: []
+federation_ip_range_blacklist: []
+push_gateway_whitelist:
+  - "franco-saucier-lucie.ngrok-free.dev"
 # --------------------------------
 
 # --- E2EE: on by default for all private/invite-only rooms ---
