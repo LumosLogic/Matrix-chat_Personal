@@ -4,7 +4,7 @@ server_name: "54.197.248.7"
 
 # Set this to your local IP or Cloudflare tunnel URL
 # Change manually as needed when your IP changes
-public_baseurl: "http://192.168.1.9:3000/"
+public_baseurl: "http://192.168.1.15:3000/"
 
 # --- ENTERPRISE REGISTRATION SETTINGS ---
 enable_registration: true
