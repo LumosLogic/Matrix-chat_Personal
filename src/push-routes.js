@@ -154,15 +154,11 @@ async function handlePushGateway(req, res) {
     content,
     counts,
     type,
+    prio,
   } = notification;
 
-  // Build human-readable notification text.
-  // For E2EE events the content is empty — show a generic string.
-  const notifTitle = sender_display_name || sender || 'New Message';
-  const isEncrypted = type === 'm.room.encrypted';
-  const notifBody = (!isEncrypted && content?.body)
-    ? content.body
-    : 'You have a new message';
+  const eventType = type ?? 'm.room.message';
+  const isCall = eventType === 'm.call.invite';
 
   // The spec sends one notification per pusher device.
   // Each device has a push_key which is the FCM token when using our pusher.
@@ -182,47 +178,39 @@ async function handlePushGateway(req, res) {
     }
 
     try {
+      // Build FCM data payload — ALL values must be strings
+      const data = {
+        room_id:             room_id ?? '',
+        event_id:            event_id ?? '',
+        type:                eventType,  // REQUIRED for call fast-path
+        sender:              sender ?? '',
+        sender_display_name: sender_display_name ?? '',
+        room_name:           room_name ?? '',
+        unread:              String(counts?.unread ?? 0),
+        prio:                prio ?? 'high',
+        body:                content?.body ?? '',
+      };
+
+      const androidConfig = {
+        priority: 'high',  // REQUIRED: bypasses Doze mode
+        data,
+        ...(isCall && {
+          notification: {
+            android_channel_id: 'cqr_incoming_call',
+          },
+        }),
+      };
+
       const message = {
         token: fcmToken,
-        // Top-level notification: OS uses this directly when app is killed
-        notification: {
-          title: notifTitle,
-          body: notifBody,
-        },
-        android: {
-          priority: 'high',
-          notification: {
-            channelId: 'cqr_push',
-            sound: 'default',
-            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-          },
-        },
-        apns: {
-          headers: { 'apns-priority': '10' },
-          payload: {
-            aps: {
-              alert: { title: notifTitle, body: notifBody },
-              sound: 'default',
-              'content-available': 1,
-            },
-          },
-        },
-        data: {
-          room_id:     room_id ?? '',
-          event_id:    event_id ?? '',
-          sender:      sender ?? '',
-          sender_name: notifTitle,
-          room_name:   room_name ?? '',
-          body:        notifBody,
-          unread:      String(counts?.unread ?? 0),
-          type:        type ?? 'm.room.message',
-        },
+        android: androidConfig,
+        data,  // top-level data for background handler
       };
 
       await messaging.send(message);
       console.log(
-        `[PUSH] Sent FCM to ${fcmToken.substring(0, 20)}… ` +
-        `(room=${room_id}, event=${event_id})`
+        `[PUSH] Sent FCM data-only ${isCall ? '(CALL)' : ''} to ${fcmToken.substring(0, 20)}… ` +
+        `(room=${room_id}, event=${event_id}, type=${eventType})`
       );
     } catch (fcmErr) {
       const code = fcmErr.code ?? '';
