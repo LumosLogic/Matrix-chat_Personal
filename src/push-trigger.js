@@ -13,6 +13,8 @@
  */
 
 const axios = require('axios');
+const fs    = require('fs');
+const path  = require('path');
 const pool  = require('./db');
 
 const SYNAPSE_URL        = process.env.SYNAPSE_URL         || 'http://localhost:8008';
@@ -39,8 +41,9 @@ function getMessaging() {
   if (raw.trim().startsWith('{')) {
     credential = admin.credential.cert(JSON.parse(raw));
   } else {
-    // File path
-    credential = admin.credential.cert(require(raw));
+    // Resolve path relative to project root (process.cwd()), not this file's directory
+    const absPath = path.resolve(process.cwd(), raw);
+    credential = admin.credential.cert(JSON.parse(fs.readFileSync(absPath, 'utf8')));
   }
   admin.initializeApp({ credential });
   return admin.apps[0].messaging();

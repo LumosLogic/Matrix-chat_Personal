@@ -74,10 +74,14 @@ async function getUserToken(userId) {
 /**
  * Return up to `limit` events in `roomId` that:
  *   • are messages / encrypted events (not state events)
+ *   • have origin_server_ts >= minTs  (only messages sent after the policy was first enabled)
  *   • have origin_server_ts < cutoffTs
  *   • have NOT already been redacted
+ *
+ * The `minTs` lower bound prevents retroactively redacting messages that were
+ * sent before the disappearing-message policy was set on the room.
  */
-async function getExpiredEvents(roomId, cutoffTs, limit = REDACT_BATCH_SIZE) {
+async function getExpiredEvents(roomId, cutoffTs, minTs = 0, limit = REDACT_BATCH_SIZE) {
   // Synapse stores redaction relationships in the 'redactions' table,
   // not as a column on the 'events' table.
   const result = await synapsePool.query(
@@ -85,26 +89,29 @@ async function getExpiredEvents(roomId, cutoffTs, limit = REDACT_BATCH_SIZE) {
      FROM   events e
      WHERE  e.room_id          = $1
        AND  e.type             IN ('m.room.message', 'm.room.encrypted', 'm.sticker')
-       AND  e.origin_server_ts < $2
+       AND  e.origin_server_ts >= $2
+       AND  e.origin_server_ts < $3
        AND  NOT EXISTS (
               SELECT 1 FROM redactions r
               WHERE  r.redacts = e.event_id
             )
      ORDER BY e.origin_server_ts ASC
-     LIMIT $3`,
-    [roomId, cutoffTs, limit],
+     LIMIT $4`,
+    [roomId, minTs, cutoffTs, limit],
   );
   return result.rows; // [{ event_id, sender }]
 }
 
 /**
  * Query Synapse DB for all rooms that currently have an m.room.retention policy.
- * @returns {Map<string, number>}  room_id → max_lifetime (ms)
+ * @returns {Map<string, { maxLifetime: number, policySetAt: number }>}
+ *   room_id → { maxLifetime (ms), policySetAt (epoch ms when policy was last set) }
  */
 async function getSynapseRetentionPolicies() {
   const result = await synapsePool.query(`
     SELECT c.room_id,
-           e.json::jsonb -> 'content' AS content
+           e.json::jsonb -> 'content'           AS content,
+           (e.json::jsonb ->> 'origin_server_ts')::bigint AS policy_set_at
     FROM   current_state_events c
     JOIN   event_json            e ON c.event_id = e.event_id
     WHERE  c.type = 'm.room.retention'
@@ -116,7 +123,12 @@ async function getSynapseRetentionPolicies() {
       const content     = typeof row.content === 'string'
         ? JSON.parse(row.content) : row.content;
       const maxLifetime = content?.max_lifetime;
-      if (maxLifetime && maxLifetime > 0) map.set(row.room_id, Number(maxLifetime));
+      if (maxLifetime && maxLifetime > 0) {
+        map.set(row.room_id, {
+          maxLifetime: Number(maxLifetime),
+          policySetAt: row.policy_set_at ? Number(row.policy_set_at) : null,
+        });
+      }
     } catch (_) { /* malformed event */ }
   }
   return map;
@@ -184,12 +196,13 @@ async function ensureTable() {
 /**
  * Find all expired, non-redacted events in `roomId` up to `cutoffTs`,
  * then redact each one using the sender's impersonated token.
+ * Only events sent on or after `minTs` (policy-enabled timestamp) are touched.
  * Returns the number of events successfully redacted.
  */
-async function redactExpiredEventsInRoom(roomId, cutoffTs) {
+async function redactExpiredEventsInRoom(roomId, cutoffTs, minTs = 0) {
   let redacted = 0;
 
-  const events = await getExpiredEvents(roomId, cutoffTs);
+  const events = await getExpiredEvents(roomId, cutoffTs, minTs);
   if (events.length === 0) return 0;
 
   console.log(`[DISAPPEAR] Redacting ${events.length} event(s) in ${roomId} (cutoff: ${new Date(cutoffTs).toISOString()})`);
@@ -282,9 +295,9 @@ async function purgeExpiredMessages() {
         if (currentPolicy === null && tracked === null) continue;
 
         // Strictest lifetime ever seen (only decreases)
-        const prevMin       = tracked?.minMaxLifetime ?? currentPolicy;
+        const prevMin       = tracked?.minMaxLifetime ?? currentPolicy?.maxLifetime;
         const effectiveMin  = currentPolicy !== null
-          ? Math.min(prevMin, currentPolicy)
+          ? Math.min(prevMin, currentPolicy.maxLifetime)
           : prevMin; // policy disabled – keep enforcing old (stricter) value
 
         if (!effectiveMin || effectiveMin <= 0) continue;
@@ -293,6 +306,13 @@ async function purgeExpiredMessages() {
         if (currentPolicy === null && tracked) {
           if (NOW - tracked.lastPurgeCutoff > MAX_TRACK_DURATION_MS + effectiveMin) continue;
         }
+
+        // policyEnabledAt: when the CURRENT retention policy was set.
+        // Messages sent BEFORE this time are never retroactively redacted —
+        // only messages sent after the current policy was set are subject to it.
+        // Use the origin_server_ts of the current m.room.retention event, or NOW
+        // if no current policy (room being tracked from previous policy).
+        const policyEnabledAt = currentPolicy?.policySetAt ?? NOW;
 
         // Monotonic cutoff
         const lastCutoff      = tracked?.lastPurgeCutoff ?? 0;
@@ -304,26 +324,31 @@ async function purgeExpiredMessages() {
         // ── Step 1: Redact expired events ────────────────────────────────
         // This sends m.room.redaction events which all clients receive.
         // Each client removes the message content from its local SQLite cache.
-        // Even if a user later changes the policy to 24 h or "off", the
-        // message is already gone from every device's local database.
-        await redactExpiredEventsInRoom(roomId, purgeCutoff);
+        // Only messages sent ON OR AFTER policyEnabledAt are redacted, so
+        // pre-policy history is preserved and visible on logout/re-login.
+        await redactExpiredEventsInRoom(roomId, purgeCutoff, policyEnabledAt);
 
-        // ── Step 2: Purge from Synapse DB ─────────────────────────────────
-        // Permanently removes both original events AND the redaction shells.
-        const purgeId = await purgeSynapseRoom(roomId, purgeCutoff);
+        // ── Step 2: purge_history intentionally skipped ───────────────────
+        // purge_history(X) removes ALL events before timestamp X from Synapse
+        // DB, including pre-policy messages. Omitting it means:
+        //   • Pre-policy messages stay in Synapse DB → always visible on re-login ✓
+        //   • Post-policy expired messages are already redacted (content gone);
+        //     their empty shells remain in the DB (negligible storage overhead)
+        //   • Users who logout + re-login always see their full pre-policy
+        //     chat history — only messages sent AFTER the policy was enabled
+        //     and past their lifetime are hidden (shown as "Message deleted"
+        //     or invisible with hideRedactedEvents=true).
 
-        if (purgeId !== null) {
-          await saveTrackedRoom(roomId, {
-            minMaxLifetime:     effectiveMin,
-            currentMaxLifetime: currentPolicy,
-            lastPurgeCutoff:    purgeCutoff,
-          });
-          console.log(
-            `[DISAPPEAR] ✓ ${roomId} | lifetime: ${effectiveMin}ms | ` +
-            `cutoff: ${new Date(purgeCutoff).toISOString()}`,
-          );
-          processedCount++;
-        }
+        await saveTrackedRoom(roomId, {
+          minMaxLifetime:     effectiveMin,
+          currentMaxLifetime: currentPolicy?.maxLifetime ?? null,
+          lastPurgeCutoff:    purgeCutoff,
+        });
+        console.log(
+          `[DISAPPEAR] ✓ ${roomId} | lifetime: ${effectiveMin}ms | ` +
+          `cutoff: ${new Date(purgeCutoff).toISOString()}`,
+        );
+        processedCount++;
       } catch (roomErr) {
         console.error(`[DISAPPEAR] Error processing room ${roomId}:`, roomErr.message);
       }

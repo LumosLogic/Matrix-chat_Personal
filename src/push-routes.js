@@ -16,6 +16,8 @@
  */
 
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const pool = require('./db');
 
 const router = express.Router();
@@ -43,7 +45,9 @@ function getFirebaseMessaging() {
   if (raw.trim().startsWith('{')) {
     credential = admin.credential.cert(JSON.parse(raw));
   } else {
-    credential = admin.credential.cert(require(raw));
+    // Resolve path relative to project root (process.cwd()), not this file's directory
+    const absPath = path.resolve(process.cwd(), raw);
+    credential = admin.credential.cert(JSON.parse(fs.readFileSync(absPath, 'utf8')));
   }
 
   admin.initializeApp({ credential });
@@ -160,6 +164,14 @@ async function handlePushGateway(req, res) {
   const eventType = type ?? 'm.room.message';
   const isCall = eventType === 'm.call.invite';
 
+  // Build human-readable notification text.
+  // For E2EE events the content is empty — show a generic string.
+  const notifTitle = sender_display_name || sender || 'New Message';
+  const isEncrypted = eventType === 'm.room.encrypted';
+  const notifBody = (!isEncrypted && content?.body)
+    ? content.body
+    : 'You have a new message';
+
   // The spec sends one notification per pusher device.
   // Each device has a push_key which is the FCM token when using our pusher.
   const rejected = [];
@@ -182,34 +194,64 @@ async function handlePushGateway(req, res) {
       const data = {
         room_id:             room_id ?? '',
         event_id:            event_id ?? '',
-        type:                eventType,  // REQUIRED for call fast-path
+        type:                eventType,
         sender:              sender ?? '',
         sender_display_name: sender_display_name ?? '',
         room_name:           room_name ?? '',
         unread:              String(counts?.unread ?? 0),
         prio:                prio ?? 'high',
-        body:                content?.body ?? '',
+        body:                notifBody,
       };
 
-      const androidConfig = {
-        priority: 'high',  // REQUIRED: bypasses Doze mode
-        data,
-        ...(isCall && {
-          notification: {
-            android_channel_id: 'cqr_incoming_call',
+      let message;
+      if (isCall) {
+        // Call invite: pure data-only FCM so Android delivers it to the
+        // Flutter background handler which shows a full-screen call UI with
+        // Accept/Decline actions. High priority bypasses Doze mode.
+        // No android.notification block — that would bypass our handler.
+        message = {
+          token: fcmToken,
+          android: {
+            priority: 'high',
           },
-        }),
-      };
-
-      const message = {
-        token: fcmToken,
-        android: androidConfig,
-        data,  // top-level data for background handler
-      };
+          data,
+        };
+      } else {
+        // Regular message: notification + data.
+        // The OS shows the notification automatically when the app is in
+        // background or killed — no background handler needed for display.
+        message = {
+          token: fcmToken,
+          // Top-level notification: OS uses this directly when app is killed
+          notification: {
+            title: notifTitle,
+            body: notifBody,
+          },
+          android: {
+            priority: 'high',
+            notification: {
+              channelId: 'cqr_push',
+              sound: 'default',
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            },
+          },
+          apns: {
+            headers: { 'apns-priority': '10' },
+            payload: {
+              aps: {
+                alert: { title: notifTitle, body: notifBody },
+                sound: 'default',
+                'content-available': 1,
+              },
+            },
+          },
+          data,
+        };
+      }
 
       await messaging.send(message);
       console.log(
-        `[PUSH] Sent FCM data-only ${isCall ? '(CALL)' : ''} to ${fcmToken.substring(0, 20)}… ` +
+        `[PUSH] Sent FCM ${isCall ? 'call (data-only)' : 'notification+data'} to ${fcmToken.substring(0, 20)}… ` +
         `(room=${room_id}, event=${event_id}, type=${eventType})`
       );
     } catch (fcmErr) {

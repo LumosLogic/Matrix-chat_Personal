@@ -77,7 +77,8 @@
       "Bash(env:*)",
       "Bash(pm2 env:*)",
       "Bash(openssl rand:*)",
-      "Bash(tar:*)"
+      "Bash(tar:*)",
+      "Bash(pm2 exec matrix-server \"node -e \"\"console.log\\(process.env.FIREBASE_SERVICE_ACCOUNT\\)\"\"\")"
     ]
   }
 }
