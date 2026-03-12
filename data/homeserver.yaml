@@ -1,9 +1,8 @@
 # Configuration file for Synapse.
 
-server_name: "franco-saucier-lucie.ngrok-free.dev"
+server_name: "54.197.248.7"
 
-# Set this to your ngrok tunnel URL
-public_baseurl: "https://franco-saucier-lucie.ngrok-free.dev/"
+public_baseurl: "http://192.168.1.12:8008/"
 
 # --- ENTERPRISE REGISTRATION SETTINGS ---
 enable_registration: true
