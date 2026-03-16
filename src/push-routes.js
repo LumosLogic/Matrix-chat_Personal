@@ -162,6 +162,14 @@ async function handlePushGateway(req, res) {
   } = notification;
 
   const eventType = type ?? 'm.room.message';
+
+  // Silent event types — store/relay in Synapse but never push to FCM
+  const SILENT_EVENT_TYPES = new Set(['im.cqr.screenshot']);
+  if (SILENT_EVENT_TYPES.has(eventType)) {
+    console.log(`[PUSH] Suppressed notification for silent event type: ${eventType}`);
+    return res.json({ rejected: [] });
+  }
+
   const isCall = eventType === 'm.call.invite';
 
   // Build human-readable notification text.

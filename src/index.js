@@ -55,8 +55,10 @@ app.put(
       res.status(synapseRes.status).json(synapseRes.data);
 
       // Fire FCM async — never blocks or crashes the message flow
+      // Silent event types: store/relay in Synapse but never push to FCM
+      const SILENT_EVENT_TYPES = new Set(['im.cqr.screenshot']);
       const eventId = synapseRes.data?.event_id;
-      if (eventId) {
+      if (eventId && !SILENT_EVENT_TYPES.has(eventType)) {
         sendPushForNewMessage({
           roomId,
           eventId,
