@@ -1,5 +1,9 @@
 require('dotenv').config();
 
+// Force IPv4 for all DNS lookups — Firebase/Google APIs are IPv6-capable but
+// this host has no IPv6 internet access, so always prefer IPv4 addresses.
+require('dns').setDefaultResultOrder('ipv4first');
+
 const express = require('express');
 const http = require('http');
 const crypto = require('crypto');
@@ -24,6 +28,10 @@ const SYNAPSE_URL_FOR_PROXY = process.env.SYNAPSE_URL || 'http://localhost:8008'
 
 const { sendPushForNewMessage } = require('./push-trigger');
 const { router: pushRoutes, handlePushGateway } = require('./push-routes');
+const { requireAuth }                                       = require('./auth-middleware');
+const { requireRole, requirePermission, requireSameTenant } = require('./role-middleware');
+const { ROLES }                                             = require('./roles');
+const roleRoutes                                            = require('./role-routes');
 
 // ===== MATRIX PUSH GATEWAY (must be BEFORE the /_matrix proxy) =====
 // Synapse requires the gateway URL path to be exactly /_matrix/push/v1/notify.
@@ -54,21 +62,12 @@ app.put(
       // Return Synapse's response to the client immediately
       res.status(synapseRes.status).json(synapseRes.data);
 
-      // Fire FCM async — never blocks or crashes the message flow
-      // Silent event types: store/relay in Synapse but never push to FCM
-      const SILENT_EVENT_TYPES = new Set(['im.cqr.screenshot']);
-      const eventId = synapseRes.data?.event_id;
-      if (eventId && !SILENT_EVENT_TYPES.has(eventType)) {
-        sendPushForNewMessage({
-          roomId,
-          eventId,
-          eventType,
-          messageBody: req.body?.body ?? null,
-          authHeader: req.headers.authorization,
-        }).catch((e) =>
-          console.error('[PUSH-TRIGGER] Unhandled error:', e.message)
-        );
-      }
+      // NOTE: push-trigger.js is intentionally NOT called here.
+      // Synapse fires push notifications via our push gateway (push-routes.js /
+      // handlePushGateway) which is the spec-compliant path and handles all
+      // event types including call invites. Calling sendPushForNewMessage here
+      // as well would cause every message to deliver two notifications to the
+      // recipient (one from Synapse gateway + one from the trigger below).
     } catch (err) {
       if (err.response) {
         res.status(err.response.status).json(err.response.data);
@@ -239,9 +238,8 @@ app.get('/.well-known/matrix/server', (req, res) => {
  * Send a Matrix message to a room as the invite bot using Synapse admin
  * user impersonation. Called after successful registration to notify the admin.
  */
-async function _notifyRoomOfRegistration(roomId, matrixUserId, email, fullName) {
+async function _notifyRoomOfRegistration(roomId, matrixUserId, fullName) {
   try {
-    // Step 1: Get a temporary access token for the invite bot via admin API
     const loginResp = await axios.post(
       `${SYNAPSE_URL}/_synapse/admin/v1/users/${encodeURIComponent(BOT_USER_ID)}/login`,
       {},
@@ -249,13 +247,12 @@ async function _notifyRoomOfRegistration(roomId, matrixUserId, email, fullName) 
     );
     const botToken = loginResp.data.access_token;
 
-    // Step 2: Send message to the room as the bot
     const txnId = `reg_${Date.now()}`;
     await axios.put(
       `${SYNAPSE_URL}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
       {
         msgtype: 'm.text',
-        body: `New user registered!\n\nName: ${fullName}\nEmail: ${email}\nMatrix ID: ${matrixUserId}\n\nThey can now log in using the FluffyChat app.`,
+        body: `New user registered!\n\nName: ${fullName}\nMatrix ID: ${matrixUserId}\n\nThey can now log in using the app.`,
       },
       { headers: { Authorization: `Bearer ${botToken}` } }
     );
@@ -265,72 +262,78 @@ async function _notifyRoomOfRegistration(roomId, matrixUserId, email, fullName) 
   }
 }
 
-// POST /invites - Create a new registration invite (ADMIN ONLY)
-app.post('/invites', requireAdmin, async (req, res) => {
-  const { email, room_id } = req.body;
+// POST /invites - Create a new registration invite (no email required)
+// Admin: own company only, roles: agent or user
+// Super Admin: any company, any role (except super_admin)
+app.post('/invites',
+  requireAuth,
+  requireRole(ROLES.ADMIN),
+  requirePermission('create_invite'),
+  async (req, res) => {
+    const { label = '', room_id, role = 'user', tenant_id } = req.body;
+    const actor = req.enterpriseUser;
 
-  if (!email) {
-    return res.status(400).json({
-      error: 'Bad Request',
-      message: 'Email is required',
-    });
-  }
-
-  // Basic email validation
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return res.status(400).json({
-      error: 'Bad Request',
-      message: 'Invalid email format',
-    });
-  }
-
-  const client = await pool.connect();
-
-  try {
-    const token = generateToken();
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-    const invitedBy = 'admin'; // Could be extracted from auth context
-
-    const result = await client.query(
-      `INSERT INTO registration_invites
-       (id, email, token, invited_by, expires_at, used, created_at, room_id)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, false, NOW(), $5)
-       RETURNING id, email, token, expires_at, created_at`,
-      [email, token, invitedBy, expiresAt, room_id || null]
-    );
-
-    const invite = result.rows[0];
-    const inviteLink = `${getBaseUrl()}/register?token=${token}`;
-
-    res.status(201).json({
-      success: true,
-      invite: {
-        id: invite.id,
-        email: invite.email,
-        expires_at: invite.expires_at,
-        created_at: invite.created_at,
-        invite_link: inviteLink,
-      },
-    });
-  } catch (error) {
-    console.error('Error creating invite:', error);
-
-    if (error.code === '23505') { // Unique violation
-      return res.status(409).json({
-        error: 'Conflict',
-        message: 'An invite with this token already exists',
-      });
+    if (!['admin', 'agent', 'user'].includes(role)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'role must be admin, agent, or user' });
     }
 
-    res.status(500).json({
-      error: 'Internal Server Error',
-      message: 'Failed to create invite',
-    });
-  } finally {
-    client.release();
+    if (actor.role === ROLES.ADMIN && role === ROLES.SUPER_ADMIN) {
+      return res.status(403).json({ error: 'Admin cannot create an invite for super_admin role' });
+    }
+
+    // Admin can only invite into their own company
+    const targetTenant = actor.role === ROLES.SUPER_ADMIN
+      ? (tenant_id || actor.tenant_id)
+      : actor.tenant_id;
+
+    if (!targetTenant) {
+      return res.status(400).json({ error: 'Bad Request', message: 'tenant_id is required' });
+    }
+
+    const client = await pool.connect();
+    try {
+      const token     = generateToken();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+      const result = await client.query(
+        `INSERT INTO registration_invites
+         (id, token, invited_by, expires_at, used, created_at, room_id, tenant_id, role)
+         VALUES (gen_random_uuid(), $1, $2, $3, false, NOW(), $4, $5, $6)
+         RETURNING id, token, expires_at, created_at, tenant_id, role`,
+        [token, req.matrixUserId, expiresAt, room_id || null, targetTenant, role]
+      );
+
+      const invite     = result.rows[0];
+      const inviteLink = `${getBaseUrl()}/register?token=${token}`;
+
+      await client.query(
+        `INSERT INTO audit_logs (action, actor, target) VALUES ('INVITE_CREATED', $1, $2)`,
+        [req.matrixUserId, `${label || 'unlabelled'} (${role}) → ${targetTenant}`]
+      );
+
+      res.status(201).json({
+        success: true,
+        invite: {
+          id:          invite.id,
+          label:       label || null,
+          role:        invite.role,
+          tenant_id:   invite.tenant_id,
+          expires_at:  invite.expires_at,
+          created_at:  invite.created_at,
+          invite_link: inviteLink,
+        },
+      });
+    } catch (error) {
+      console.error('Error creating invite:', error);
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: 'An invite with this token already exists' });
+      }
+      res.status(500).json({ error: 'Internal Server Error', message: 'Failed to create invite' });
+    } finally {
+      client.release();
+    }
   }
-});
+);
 
 // GET /register - Serve registration page
 app.get('/register', (req, res) => {
@@ -353,6 +356,7 @@ const keyBackupRoutes = require('./key-backup-routes');
 app.use('/api/keys', keyBackupRoutes);
 
 app.use('/api/push', pushRoutes);
+app.use('/api/roles', roleRoutes);
 
 // GET /api/validate-token - Validate invite token before showing form
 app.get('/api/validate-token', async (req, res) => {
@@ -369,7 +373,7 @@ app.get('/api/validate-token', async (req, res) => {
   try {
     // Look up the token (include used/expired for specific messaging)
     const result = await pool.query(
-      `SELECT id, email, expires_at, used, used_at
+      `SELECT id, expires_at, used, used_at
        FROM registration_invites
        WHERE token = $1`,
       [token]
@@ -404,10 +408,7 @@ app.get('/api/validate-token', async (req, res) => {
     }
 
     // Token is valid
-    res.json({
-      valid: true,
-      email: invite.email,
-    });
+    res.json({ valid: true });
   } catch (error) {
     console.error('Token validation error:', error);
     res.status(500).json({
@@ -454,7 +455,7 @@ app.post('/register', async (req, res) => {
 
     // Validate invite token - fetch full record for specific error messages
     const inviteResult = await client.query(
-      `SELECT id, email, invited_by, expires_at, used, room_id
+      `SELECT id, invited_by, expires_at, used, room_id, role, tenant_id
        FROM registration_invites
        WHERE token = $1
        FOR UPDATE`,
@@ -504,12 +505,6 @@ app.post('/register', async (req, res) => {
           displayname: full_name,
           admin: false,
           deactivated: false,
-          threepids: [
-            {
-              medium: 'email',
-              address: invite.email,
-            },
-          ],
         },
         {
           headers: {
@@ -543,13 +538,13 @@ app.post('/register', async (req, res) => {
       });
     }
 
-    // Create enterprise user record
+    // Create enterprise user record — role and tenant_id come from the invite, never from client
     const userResult = await client.query(
       `INSERT INTO enterprise_users
-       (id, email, full_name, role, matrix_user_id, status, created_at)
-       VALUES (gen_random_uuid(), $1, $2, 'user', $3, 'active', NOW())
-       RETURNING id, email, full_name, role, matrix_user_id, status, created_at`,
-      [invite.email, full_name, matrixUserId]
+       (id, full_name, role, tenant_id, matrix_user_id, status, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, 'active', NOW())
+       RETURNING id, full_name, role, tenant_id, matrix_user_id, status, created_at`,
+      [full_name, invite.role || 'user', invite.tenant_id || 'default', matrixUserId]
     );
 
     const user = userResult.rows[0];
@@ -581,7 +576,7 @@ app.post('/register', async (req, res) => {
 
     // Send chat notification to the room where !invite was typed (fire-and-forget)
     if (invite.room_id) {
-      _notifyRoomOfRegistration(invite.room_id, matrixUserId, invite.email, full_name).catch(e => {
+      _notifyRoomOfRegistration(invite.room_id, matrixUserId, full_name).catch(e => {
         console.error('[NOTIFY] Failed to send registration notification:', e.message);
       });
     }
@@ -590,9 +585,9 @@ app.post('/register', async (req, res) => {
       success: true,
       user: {
         id: user.id,
-        email: user.email,
         full_name: user.full_name,
         role: user.role,
+        tenant_id: user.tenant_id,
         matrix_user_id: user.matrix_user_id,
         status: user.status,
         created_at: user.created_at,
@@ -605,7 +600,7 @@ app.post('/register', async (req, res) => {
     if (error.code === '23505') { // Unique violation
       return res.status(409).json({
         error: 'Conflict',
-        message: 'A user with this email or Matrix ID already exists',
+        message: 'A user with this Matrix ID already exists',
       });
     }
 
@@ -618,32 +613,34 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// GET /invites/:id - Get invite status (ADMIN ONLY)
-app.get('/invites/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
+// GET /invites/:id - Get invite status (Admin or Super Admin)
+app.get('/invites/:id', requireAuth, requireRole(ROLES.ADMIN), async (req, res) => {
+  const { id }  = req.params;
+  const actor   = req.enterpriseUser;
 
   try {
     const result = await pool.query(
-      `SELECT id, email, invited_by, expires_at, used, used_at, created_at
+      `SELECT id, email, invited_by, expires_at, used, used_at, created_at, tenant_id, role
        FROM registration_invites
        WHERE id = $1`,
       [id]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Not Found',
-        message: 'Invite not found',
-      });
+      return res.status(404).json({ error: 'Not Found', message: 'Invite not found' });
     }
 
-    res.json({ invite: result.rows[0] });
+    const invite = result.rows[0];
+
+    // Admin can only view invites within their own company
+    if (actor.role !== ROLES.SUPER_ADMIN && invite.tenant_id !== actor.tenant_id) {
+      return res.status(403).json({ error: 'Access denied: cross-company action not allowed' });
+    }
+
+    res.json({ invite });
   } catch (error) {
     console.error('Error fetching invite:', error);
-    res.status(500).json({
-      error: 'Internal Server Error',
-      message: 'Failed to fetch invite',
-    });
+    res.status(500).json({ error: 'Internal Server Error', message: 'Failed to fetch invite' });
   }
 });
 
@@ -670,9 +667,7 @@ server.listen(PORT, () => {
   console.log(`Health check: ${BASE_URL}/health`);
   console.log(`Matrix VoIP enabled (signaling via Synapse sync)`);
 
-  // NOTE: Bots now run as separate PM2 processes instead of child_process.fork()
-  // Start them with: pm2 start ecosystem.config.js
-  console.log('\nBots should be running as separate PM2 processes (invite-bot, ai-bot)');
+  console.log('\nAI bot should be running as a separate PM2 process (ai-bot)');
 
   // Location session expiry timer - runs every 60 seconds
   // (handles web-UI based location sessions from /api/location/*)

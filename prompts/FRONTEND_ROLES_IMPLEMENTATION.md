@@ -1,7 +1,9 @@
 # Frontend Role-Based Access Control (RBAC) — Implementation Prompt
 
-> **Status:** Deferred to future sprint. Backend must be fully implemented first.
-> **App:** Flutter (FluffyChat fork) at `/Users/priyanshupatel/Downloads/Lumos Logic/CQR-Chat`
+> **Status:** Ready to implement. Backend is fully complete and deployed.
+> **App:** Flutter (FluffyChat fork) at `/Users/vtechglobe/Downloads/Priyanshu/CQR-Chat`
+> **Backend base URL:** `https://api.enrichlabs.net` (Node.js — port 3000)
+> **Matrix homeserver:** `https://cqr-server.enrichlabs.net` (Synapse — port 8008)
 
 ---
 
@@ -18,8 +20,12 @@ Super Admin  >  Admin  >  Agent (Trusted User)  >  User
 |---|---|---|
 | `super_admin` | Platform-wide | Manages ALL companies |
 | `admin` | Company-level | Full control of their company |
-| `agent` | Company-level | Trusted User — external sharing (1 per company) |
+| `agent` | Company-level | Trusted User — external sharing privilege (**multiple allowed per company**) |
 | `user` | Company-level | Staff members and clients (default) |
+
+> **Agent (Trusted User) — multiple allowed per company.**
+> Admin can freely assign the `agent` role to any number of users in their company.
+> There is NO limit on how many agents a company can have.
 
 ---
 
@@ -64,9 +70,10 @@ extension UserRoleExtension on UserRole {
   bool get canViewAllCompanies  => this == UserRole.superAdmin;
   bool get canManageUsers       => isAtLeast(UserRole.admin);
   bool get canInviteUsers       => isAtLeast(UserRole.admin);
-  bool get canChangeUserRole    => isAtLeast(UserRole.admin); // Admin: up to admin; Super Admin: up to admin
+  // Admin can freely move users between user ↔ agent ↔ admin (not super_admin)
+  bool get canChangeUserRole    => isAtLeast(UserRole.admin);
   bool get canViewFullAuditLog  => isAtLeast(UserRole.admin);
-  // External sharing: Admin + Agent + Super Admin (NOT user)
+  // External sharing: Admin + Agent + Super Admin (NOT plain user)
   bool get canShareExternally   => isAtLeast(UserRole.agent);
   bool get canExportChat        => isAtLeast(UserRole.agent);
   bool get canDownloadFiles     => isAtLeast(UserRole.agent);
@@ -77,7 +84,7 @@ extension UserRoleExtension on UserRole {
     switch (this) {
       case UserRole.superAdmin: return 'Super Admin';
       case UserRole.admin:      return 'Admin';
-      case UserRole.agent:      return 'Agent';
+      case UserRole.agent:      return 'Trusted User';
       case UserRole.user:       return 'User';
     }
   }
@@ -144,7 +151,6 @@ import '../providers/role_provider.dart';
 
 /// Shows [child] only when the current user's role meets [minimum].
 /// Shows [fallback] (default: empty box) otherwise.
-/// Use this everywhere in the UI to progressively hide admin features.
 class RoleGuard extends StatelessWidget {
   final UserRole minimum;
   final Widget   child;
@@ -164,8 +170,8 @@ class RoleGuard extends StatelessWidget {
   }
 }
 
-/// Use this variant for permission-based (not just role-level) guards.
-/// Example: canShareExternally is true for Agent AND Super Admin (not just role level).
+/// Permission-based guard (for permissions that skip a role level).
+/// Example: canShareExternally is true for Agent AND above (not just admin level).
 class PermissionGuard extends StatelessWidget {
   final bool Function(UserRole role) permission;
   final Widget child;
@@ -194,7 +200,7 @@ RoleGuard(
   child: ListTile(title: const Text('Manage Users'), onTap: _openManageUsers),
 )
 
-// Show external share button only for agent AND super_admin (not admin!)
+// Show external share button for agent AND above (not plain user)
 PermissionGuard(
   permission: (role) => role.canShareExternally,
   child: IconButton(icon: const Icon(Icons.share), onPressed: _shareExternally),
@@ -222,7 +228,7 @@ RoleGuard(
   ),
 ),
 
-// Agent and above — audit log (own actions)
+// Agent and above — own activity log
 RoleGuard(
   minimum: UserRole.agent,
   child: ListTile(
@@ -268,13 +274,11 @@ RoleGuard(
 ### 5. Route Protection — `lib/config/routes.dart`
 
 ```dart
-// Helper to build a role-guarded redirect
 String? _guardRoute(BuildContext context, UserRole minimum, {String fallback = '/'}) {
   final role = ProviderScope.containerOf(context).read(roleProvider).role;
   return role.isAtLeast(minimum) ? null : fallback;
 }
 
-// Routes
 GoRoute(
   path: '/admin/users',
   redirect: (ctx, _) => _guardRoute(ctx, UserRole.admin),
@@ -311,19 +315,20 @@ GoRoute(
 
 #### Admin Pages
 - `lib/pages/admin/admin_users_page.dart`
-  — List all users in their company (role, status)
-  — Change role (agent ↔ user)
+  — List all users in their company (name, role badge, status)
+  — Change role: `user ↔ agent ↔ admin` freely (no limit on agents)
   — Deactivate / reactivate user
+  — **Cannot touch Super Admin users**
+  — **Cannot change own role**
 - `lib/pages/admin/invite_user_page.dart`
-  — Email input + role selector (agent / user)
-  — Calls `POST /invites`
-  — Shows invite link / token on success
+  — Label input (name/description — **no email required**)
+  — Role selector: `user` / `agent (Trusted User)` / `admin`
+  — Calls `POST /invites` with `{ label, role }`
+  — Shows invite link on success (copy / share)
 - `lib/pages/admin/company_audit_log_page.dart`
   — Audit log scoped to their company
-- `lib/pages/admin/byod_approval_page.dart`
-  — List pending BYOD requests, approve / reject
 
-#### Agent Pages
+#### Agent (Trusted User) Pages
 - `lib/pages/agent/external_share_page.dart`
   — File picker → share via platform share sheet (WhatsApp, email, etc.)
   — Logs every share action
@@ -334,16 +339,53 @@ GoRoute(
 
 #### All Roles
 - `lib/pages/profile/my_profile_page.dart`
-  — Shows name, email, role display name, company name
+  — Shows name, role display name (`Trusted User` for agent), company name
 
 ---
 
-### 7. External Sharing (Admin + Agent + Super Admin)
+### 7. Role Assignment UX — Admin Users Page
+
+The role change dropdown for each user should offer:
+
+```dart
+// Available roles admin can assign (cannot assign super_admin)
+const assignableRoles = ['user', 'agent', 'admin'];
+```
+
+**No restriction on how many agents.** Admin can assign `agent` to any number of users.
+The dropdown simply patches the role — no warning about "already has an agent" needed.
+
+Role badge colors:
+```dart
+Color _roleColor(String role) {
+  switch (role) {
+    case 'super_admin': return Colors.red.shade100;
+    case 'admin':       return Colors.orange.shade100;
+    case 'agent':       return Colors.blue.shade100;
+    default:            return Colors.grey.shade200;
+  }
+}
+
+// Display label (agent shows as "Trusted User" in UI)
+String _roleLabel(String role) {
+  switch (role) {
+    case 'super_admin': return 'Super Admin';
+    case 'admin':       return 'Admin';
+    case 'agent':       return 'Trusted User';
+    default:            return 'User';
+  }
+}
+```
+
+Always show a confirmation dialog before changing a role or deactivating an account.
+
+---
+
+### 8. External Sharing (Admin + Agent + Super Admin)
 
 In the file viewer and chat pages, show the share button for all roles with `canShareExternally`:
 
 ```dart
-// In file viewer
 PermissionGuard(
   permission: (role) => role.canShareExternally,
   child: IconButton(
@@ -358,13 +400,12 @@ PermissionGuard(
 1. Call `Share.shareFiles([localPath], text: fileName)` (using `share_plus` package)
 2. After share completes, POST to `/api/audit` to log the `EXTERNAL_SHARE` event
 
-> Admin, Agent, and Super Admin all have this permission. User does NOT.
+> Admin, Agent (Trusted User), and Super Admin all have this permission. Plain User does NOT.
 
 ---
 
-### 8. Chat Export (Admin + Agent + Super Admin)
+### 9. Chat Export (Admin + Agent + Super Admin)
 
-In chat view menu:
 ```dart
 PermissionGuard(
   permission: (role) => role.canExportChat,
@@ -380,31 +421,9 @@ PermissionGuard(
 
 ---
 
-### 9. User Role Badge (Admin Panel)
-
-In `admin_users_page.dart`, show a color-coded chip next to each user:
-
-```dart
-Chip(
-  label: Text(UserRoleExtension.fromString(user['role']).displayName),
-  backgroundColor: _roleColor(user['role']),
-)
-
-Color _roleColor(String role) {
-  switch (role) {
-    case 'super_admin': return Colors.red.shade100;
-    case 'admin':       return Colors.orange.shade100;
-    case 'agent':       return Colors.blue.shade100;
-    default:            return Colors.grey.shade200;
-  }
-}
-```
-
----
-
 ### 10. API Service Methods — `lib/services/api_service.dart`
 
-Add these methods:
+All API calls use `AppConfig.backendUrl` = `https://api.enrichlabs.net`.
 
 ```dart
 // Role & user management
@@ -416,6 +435,8 @@ Future<List<dynamic>> getCompanyUsers() async {
   return data['users'] as List<dynamic>;
 }
 
+// new_role: 'user' | 'agent' | 'admin'
+// Admin can assign agent to multiple users freely — no limit
 Future<void> changeUserRole(String userId, String newRole) =>
     patch('/api/roles/users/$userId/role', {'new_role': newRole});
 
@@ -439,36 +460,97 @@ Future<Map<String, dynamic>> createCompany(String name, String tenantId) =>
 Future<void> setCompanyStatus(String tenantId, String status) =>
     patch('/api/roles/companies/$tenantId/status', {'status': status});
 
-// Invite
-Future<Map<String, dynamic>> createInvite(String email, String role) =>
-    post('/invites', {'email': email, 'role': role});
+// Invite — NO email field. Use label (name / description) instead.
+// role: 'user' | 'agent' | 'admin'  (super_admin cannot be invited)
+Future<Map<String, dynamic>> createInvite(String label, String role) =>
+    post('/invites', {'label': label, 'role': role});
 ```
+
+> **Important:** The invite endpoint does NOT accept email or phone number.
+> `label` is a free-text description (e.g. "New Sales Agent", "Client - Acme Corp").
+> No email is stored or sent anywhere. The invite link is shared manually by the Admin.
+
+---
+
+## Complete API Surface (Backend — Already Deployed)
+
+| Method | Path | Min Role | Description |
+|---|---|---|---|
+| GET | `/api/roles/me` | user | Own role, tenant, status |
+| GET | `/api/roles/users` | admin | All users (Super Admin: all tenants; Admin: own company) |
+| PATCH | `/api/roles/users/:id/role` | admin | Change a user's role |
+| PATCH | `/api/roles/users/:id/status` | admin | Activate / deactivate user |
+| GET | `/api/roles/audit-logs` | agent | Audit log (scoped by role) |
+| GET | `/api/roles/companies` | super_admin | List all companies |
+| POST | `/api/roles/companies` | super_admin | Create a new company |
+| PATCH | `/api/roles/companies/:tenantId/status` | super_admin | Activate / deactivate company |
+| POST | `/invites` | admin | Create invite token (no email — label only) |
+| GET | `/invites/:id` | admin | Check invite status |
+
+---
+
+## Role Access Matrix
+
+| Action | Super Admin | Admin | Agent | User |
+|---|:---:|:---:|:---:|:---:|
+| Send messages | ✅ | ✅ | ✅ | ✅ |
+| Upload / view files | ✅ | ✅ | ✅ | ✅ |
+| Download files | ✅ | ✅ | ✅ | ❌ |
+| Manage room members | ✅ | ✅ | ✅ | ❌ |
+| View own audit log | ✅ | ✅ | ✅ | ❌ |
+| **External file sharing** | ✅ | ✅ | ✅ | ❌ |
+| **Export chat history** | ✅ | ✅ | ✅ | ❌ |
+| View full company audit log | ✅ | ✅ | ❌ | ❌ |
+| Invite new users (no email) | ✅ | ✅ | ❌ | ❌ |
+| Manage / deactivate users | ✅ | ✅ (not super_admin) | ❌ | ❌ |
+| Change user roles (up to admin) | ✅ | ✅ (not super_admin) | ❌ | ❌ |
+| Assign agent role (unlimited) | ✅ | ✅ | ❌ | ❌ |
+| Assign admin role within company | ✅ | ✅ | ❌ | ❌ |
+| Assign super_admin role | ✅ | ❌ | ❌ | ❌ |
+| View all companies | ✅ | ❌ | ❌ | ❌ |
+| Create / deactivate company | ✅ | ❌ | ❌ | ❌ |
+| View all tenants' audit logs | ✅ | ❌ | ❌ | ❌ |
+
+---
+
+## Key Behavioral Rules (Backend Enforced)
+
+- Admin can freely move users between `user → agent → admin` and back
+- Admin **cannot** touch Super Admin users
+- Admin **cannot** change their own role
+- Admin **cannot** assign `super_admin` role
+- **No limit on agents per company** — multiple Trusted Users allowed
+- Super Admin cannot modify another Super Admin's role
+- `requireSameTenant` ensures Admin cannot act on users in other companies
+- Super Admin bypasses tenant isolation (platform-wide access)
 
 ---
 
 ## Implementation Order
 
 1. Create `UserRole` enum and extension (`user_role.dart`)
-2. Create `RoleProvider` + wire into `matrix.dart` after login
+2. Create `RoleProvider` + wire into `matrix.dart` after login / `_performLogout`
 3. Create `RoleGuard` and `PermissionGuard` widgets
 4. Add `RoleProvider` to the Provider tree in `main.dart`
 5. Wrap existing UI elements (drawer, menus, buttons) with guards
 6. Add route protection in `routes.dart`
-7. Build **Admin pages** first (user list, invite)
-8. Build **Agent pages** (external share, chat export)
-9. Build **Super Admin pages** (companies list)
+7. Build **Admin pages** (user list with role badges, invite without email)
+8. Build **Agent pages** (external share, chat export, own activity)
+9. Build **Super Admin pages** (companies list, platform audit log)
 10. Test all four roles end-to-end on device
 
 ---
 
 ## UI/UX Principles
 
-- **Progressive disclosure:** Users never see admin UI. Do not disable — hide completely.
-- **External share is visually distinct:** Use a different icon (`ios_share`) and confirm dialog before sharing, since it sends data outside the secure environment.
-- **External sharing: Admin + Agent + Super Admin** — all three roles see the share button. Only User is excluded.
-- **No role labels in chat UI:** Regular users should never see "You are a User" anywhere in the chat interface. Role info only appears in the profile/settings pages.
-- **Company isolation in Super Admin view:** When Super Admin views users across companies, always show the company name alongside each user.
-- **Role change confirmation:** Always show a confirmation dialog before changing a user's role or deactivating an account.
+- **Progressive disclosure:** Users never see admin UI. Hide completely — do not disable.
+- **Agent displays as "Trusted User"** everywhere in the UI (`displayName` = `'Trusted User'`).
+- **No email anywhere:** The invite flow has no email input. Admin enters a label/description, copies the link, and shares it manually (WhatsApp, Slack, etc.).
+- **No role labels in chat UI:** Regular users never see "You are a User" in the chat interface. Role info appears only in profile/settings pages.
+- **External share is visually distinct:** Use a different icon (`ios_share`) and a confirm dialog before sharing, since data leaves the secure environment.
+- **Company isolation in Super Admin view:** Always show company name alongside each user when Super Admin views across tenants.
+- **Role change confirmation:** Always confirm before changing a role or deactivating an account.
+- **No "agent limit" warning needed:** Since multiple agents are allowed, never show a warning about existing agents when assigning the agent role.
 
 ---
 
@@ -476,7 +558,7 @@ Future<Map<String, dynamic>> createInvite(String email, String role) =>
 
 ```yaml
 provider:   ^6.1.2   # if not already present — for RoleProvider
-share_plus: ^7.2.1   # for external file sharing from Agent role
+share_plus: ^7.2.1   # for external file sharing from Agent/Admin role
 ```
 
 > `go_router` is already used for routing.

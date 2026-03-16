@@ -89,6 +89,7 @@ ip_range_whitelist:
 url_preview_ip_range_blacklist: []
 federation_ip_range_blacklist: []
 push_gateway_whitelist:
+  - "cqr-server.enrichlabs.net"
   - "api.enrichlabs.net"
 # --------------------------------
 

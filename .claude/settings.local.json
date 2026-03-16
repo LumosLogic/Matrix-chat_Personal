@@ -83,7 +83,19 @@
       "Bash(pandoc:*)",
       "Bash(brew install:*)",
       "Bash(ps:*)",
-      "Bash(kill:*)"
+      "Bash(kill:*)",
+      "Bash(psql:*)",
+      "Read(//Applications/Postgres.app/Contents/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Read(//var/run/**)",
+      "Read(//Users/vtechglobe/.docker/run/**)",
+      "Read(//run/**)",
+      "Bash(DOCKER_HOST=unix:///var/run/docker.sock docker ps 2>&1)",
+      "Bash(pkill:*)",
+      "Read(//etc/cloudflared/**)",
+      "Bash(find / -name *.yml -path */cloudflared/*)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }

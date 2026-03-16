@@ -25,8 +25,7 @@ module.exports = {
       max_restarts: 50,
       min_uptime: 5000,
     },
-    // invite-bot and ai-bot disabled — start manually when needed:
-    // pm2 start ecosystem.config.js --only invite-bot
+    // ai-bot disabled — start manually when needed:
     // pm2 start ecosystem.config.js --only ai-bot
   ],
 };

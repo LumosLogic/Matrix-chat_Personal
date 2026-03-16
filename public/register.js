@@ -265,7 +265,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return { valid: false, reason: result.reason || 'invalid' };
       }
 
-      return { valid: true, email: result.email };
+      return { valid: true };
     } catch (error) {
       console.error('Token validation error:', error);
       return { valid: false, reason: 'error' };
