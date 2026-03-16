@@ -79,7 +79,11 @@
       "Bash(openssl rand:*)",
       "Bash(tar:*)",
       "Bash(pm2 exec matrix-server \"node -e \"\"console.log\\(process.env.FIREBASE_SERVICE_ACCOUNT\\)\"\"\")",
-      "Bash(brew services:*)"
+      "Bash(brew services:*)",
+      "Bash(pandoc:*)",
+      "Bash(brew install:*)",
+      "Bash(ps:*)",
+      "Bash(kill:*)"
     ]
   }
 }

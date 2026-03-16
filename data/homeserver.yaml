@@ -2,7 +2,7 @@
 
 server_name: "54.197.248.7"
 
-public_baseurl: "http://192.168.1.12:8008/"
+public_baseurl: "https://cqr-server.enrichlabs.net/"
 
 # --- ENTERPRISE REGISTRATION SETTINGS ---
 enable_registration: true
@@ -89,7 +89,7 @@ ip_range_whitelist:
 url_preview_ip_range_blacklist: []
 federation_ip_range_blacklist: []
 push_gateway_whitelist:
-  - "franco-saucier-lucie.ngrok-free.dev"
+  - "api.enrichlabs.net"
 # --------------------------------
 
 # --- E2EE: on by default for all private/invite-only rooms ---
